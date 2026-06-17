@@ -497,6 +497,18 @@ toggle(Tabs.Combat, "DamageMultiplierToggle", "Damage Multiplier",
 toggle(Tabs.Combat, "PDCChargesToggle", "PDC Charges", function(v) config.pdcChargesEnabled = v end)
 toggle(Tabs.Combat, "SuperWeaponsToggle", "Super Weapons (Infinite Ammo)", function(v) config.superWeaponsEnabled = v end)
 
+Tabs.Combat:AddButton({Title="Spawn Noob Units", Description="Spawns all standard noob units to workspace", Callback=function()
+    local ex = {Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1, Achilles=1, Confidant=1, London=1}
+    local count = 0
+    for _, v in ipairs(game:GetService("ReplicatedStorage").Units.Noobs:GetChildren()) do
+        if not ex[v.Name] then
+            v.Parent = workspace
+            count = count + 1
+        end
+    end
+    notify("Spawn Noob Units", "Spawned " .. count .. " unit" .. (count==1 and "" or "s"), 4)
+end})
+
 toggle(Tabs.Misc, "LandmineToggle", "Destroy Landmine", function(v) config.destroyLandmines = v end)
 toggle(Tabs.Misc, "BolterCoinToggle", "Bolter Coin Hit (Hold Q)", function(v) config.bolterCoinHit = v end)
 toggle(Tabs.Misc, "AutoVoteToggle", "Auto Vote Waves", function(v) config.autoVoteWaves = v end)
