@@ -19,16 +19,16 @@ local NOT_TELEPORTABLE = { Platform=1, Hermes=1 }
 for i = 1, 11 do if i ~= 8 then EXCLUDED["dead guy " .. i] = 1 end end
 
 local config = getgenv().config or {
-    teleportEnabled=false, destroyLandmines=false, mercyKillEnabled=false,
-    mercyKillMouseEnabled=false, bolterCoinHit=false, autoVoteWaves=false,
-    pdcChargesEnabled=false, superWeaponsEnabled=false,
+    killauraEnabled=false, isTeleportEnabled=false, shouldDestroyLandmines=false, isMercyKillEnabled=false,
+    isMercyKillMouseEnabled=false, isBolterCoinHitEnabled=false, isAutoVoteEnabled=false,
+    isPDCChargesEnabled=false, isSuperWeaponsEnabled=false,
 }
 getgenv().config = config
 
 local cachedWeapon, lastFind, killauraOn, killauraThread = nil, 0, false, nil
 local swingN, semiDown, qDown, mercyBusy = 0, false, false, false
 local mtModified, mt, origNamecall = false, nil, nil
-local curTarget, locked, bursting = nil, false, false
+local currentTarget, locked, bursting = nil, false, false
 local npcCache, npcStale = {}, true
 
 local function notify(t, c, d) Fluent:Notify({Title=t, Content=c, Duration=d or 5}) end
@@ -75,7 +75,7 @@ local function scanChildren(out, parent, model, pat)
     return found
 end
 
-local function refreshNPCs(force)
+local function scanNPCs(force)
     if not force and not npcStale then return npcCache end
     local out, children = {}, workspace:GetChildren()
 
@@ -133,10 +133,10 @@ local function refreshNPCs(force)
     return out
 end
 
-local function teleportNPCs()
+local function bringNPCs()
     local hrp = getHRP() if not hrp then return end
     local fwd, yaw = hrp.CFrame.LookVector, hrp.Orientation.Y
-    for _, e in ipairs(refreshNPCs(false)) do
+    for _, e in ipairs(scanNPCs(false)) do
         if e.target.Parent and e.target.Health > 0 and not NOT_TELEPORTABLE[e.model.Name] then
             local pp = e.model.PrimaryPart or e.model:FindFirstChild("HumanoidRootPart")
             if pp then
@@ -293,7 +293,7 @@ local function attackBatch(targets)
 end
 
 -- Damage multiplier
-local function resetBurst() curTarget, locked, bursting = nil, false, false end
+local function resetBurst() currentTarget, locked, bursting = nil, false, false end
 
 local function cleanupMultiplier()
     if not mtModified then return end
@@ -310,13 +310,13 @@ local function setupMultiplier()
             if _G.multiplier and method == "FireServer" and tostring(self) == "VerifyHit"
                 and LP.Character and self:IsDescendantOf(LP.Character) then
                 local t = args[1]
-                if t and t:IsA("Humanoid") and (not bursting or curTarget ~= t) then
-                    curTarget, locked, bursting = t, true, true
+                if t and t:IsA("Humanoid") and (not bursting or currentTarget ~= t) then
+                    currentTarget, locked, bursting = t, true, true
                     task.spawn(function()
-                        local n, active = 1, curTarget
-                        while locked and active == curTarget do
+                        local n, active = 1, currentTarget
+                        while locked and active == currentTarget do
                             if not active.Parent or active.Health <= 0 then
-                                if active == curTarget then resetBurst() end break
+                                if active == currentTarget then resetBurst() end break
                             end
                             n = n + 1
                             pcall(function()
@@ -331,7 +331,7 @@ local function setupMultiplier()
                                     self.FireServer(self, unpack(na))
                                 else self.FireServer(self, unpack(args)) end
                             end)
-                            if n > BURST_CAP then if active == curTarget then resetBurst() end break end
+                            if n > BURST_CAP then if active == currentTarget then resetBurst() end break end
                             task.wait(BURST_DELAY)
                         end
                     end)
@@ -346,14 +346,14 @@ end
 -- PDC / Super weapons loop
 task.spawn(function()
     while true do
-        if config.pdcChargesEnabled or config.superWeaponsEnabled then
+        if config.isPDCChargesEnabled or config.isSuperWeaponsEnabled then
             local t = LP.Character and LP.Character:FindFirstChildOfClass("Tool")
             if t then
-                if config.pdcChargesEnabled and t.Name == "PDC kit" then
+                if config.isPDCChargesEnabled and t.Name == "PDC kit" then
                     t:SetAttribute("Charges", 999); t:SetAttribute("MaxCharges", 999)
                     t:SetAttribute("Cooldown", 0.1); t:SetAttribute("AutoReload", true)
                     t:SetAttribute("ContinuousFire", true); t:SetAttribute("Unlimited", true)
-                elseif config.superWeaponsEnabled and t.Name ~= "RPG" and t.Name ~= "Parabolic Hydra"
+                elseif config.isSuperWeaponsEnabled and t.Name ~= "RPG" and t.Name ~= "Parabolic Hydra"
                     and t.Name ~= "Grenade Launcher" and t.Name ~= "PDC kit" then
                     t:SetAttribute("Ammo", 999)
                 end
@@ -372,7 +372,7 @@ UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.Semicolon then
         semiDown = true
-        if config.mercyKillEnabled and not config.mercyKillMouseEnabled and not mercyBusy then
+        if config.isMercyKillEnabled and not config.isMercyKillMouseEnabled and not mercyBusy then
             local hrp, mk = getHRP(), findMercy()
             if hrp and mk then
                 mercyBusy = true
@@ -398,7 +398,7 @@ end)
 
 task.spawn(function()
     while true do
-        if config.mercyKillMouseEnabled and semiDown then
+        if config.isMercyKillMouseEnabled and semiDown then
             local pos, mk = mousePos(), findMercy()
             if pos and mk then mk.VerifyHit:FireServer(nil, pos) end
         end
@@ -408,7 +408,7 @@ end)
 
 task.spawn(function()
     while true do
-        if config.bolterCoinHit and qDown then
+        if config.isBolterCoinHitEnabled and qDown then
             local pos = mousePos()
             local pm = workspace:FindFirstChild(LP.Name)
             local b = pm and pm:FindFirstChild("Bolter")
@@ -420,7 +420,7 @@ end)
 
 task.spawn(function()
     while true do
-        if config.autoVoteWaves then
+        if config.isAutoVoteEnabled then
             pcall(function() game:GetService("ReplicatedStorage").Remotes.Waves.Vote:InvokeServer() end)
         end
         task.wait(VOTE_DLY)
@@ -430,11 +430,11 @@ end)
 -- Main loop
 local tpTh, mineTh = 0, 0
 RunService.Heartbeat:Connect(function(dt)
-    if config.teleportEnabled then
+    if config.isTeleportEnabled then
         tpTh = tpTh + dt
-        if tpTh >= TP_DLY then tpTh = 0; teleportNPCs() end
+        if tpTh >= TP_DLY then tpTh = 0; bringNPCs() end
     end
-    if config.destroyLandmines then
+    if config.shouldDestroyLandmines then
         mineTh = mineTh + dt
         if mineTh >= MINE_DLY then mineTh = 0; destroyLandmines() end
     end
@@ -447,10 +447,11 @@ local Window = Fluent:CreateWindow({
     MinimizeKey = Enum.KeyCode.LeftControl,
 })
 local Tabs = {
-    Main     = Window:AddTab({Title="Main",    Icon="code-2"}),
-    Combat   = Window:AddTab({Title="Combat",  Icon="sword"}),
-    Misc     = Window:AddTab({Title="Miscellaneous", Icon="plus-circle"}),
-    Settings = Window:AddTab({Title="Settings", Icon="settings"}),
+    Main      = Window:AddTab({Title="Main",      Icon="zap"}),
+    Combat    = Window:AddTab({Title="Combat",    Icon="sword"}),
+    Targeting = Window:AddTab({Title="Targeting", Icon="target"}),
+    Utility   = Window:AddTab({Title="Utility",   Icon="plus-circle"}),
+    Settings  = Window:AddTab({Title="Settings",  Icon="settings"}),
 }
 SaveManager:SetLibrary(Fluent); InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
@@ -461,26 +462,15 @@ local function toggle(tab, name, title, cb)
     tab:AddToggle(name, {Title=title, Default=false}):OnChanged(cb)
 end
 
-toggle(Tabs.Main, "TeleportNPCsToggle", "Teleport NPCs", function(v) config.teleportEnabled = v end)
-toggle(Tabs.Main, "MercyKillToggle", "Mercy Kill", function(v)
-    config.mercyKillEnabled = v
-    if v and config.mercyKillMouseEnabled then config.mercyKillMouseEnabled = false; Tabs.Main:SetValue("MouseMercyKillToggle", false) end
-end)
-toggle(Tabs.Main, "MouseMercyKillToggle", "Mercy Kill (Mouse)", function(v)
-    config.mercyKillMouseEnabled = v
-    if v then
-        if config.mercyKillEnabled then config.mercyKillEnabled = false; Tabs.Main:SetValue("MercyKillToggle", false) end
-        notify("Mercy Kill (Mouse)", "Hold semicolon to fire at mouse", 4)
-    end
-end)
-
-toggle(Tabs.Combat, "KillauraToggle", "Killaura", function(v)
+-- MAIN TAB: Core toggle features
+toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
     killauraOn = v
+    config.killauraEnabled = v
     if killauraOn then
         if killauraThread then coroutine.close(killauraThread); killauraThread = nil end
         killauraThread = coroutine.create(function()
             while killauraOn do
-                if tick() - lastFind > RESCAN_INT then refreshNPCs(true); lastFind = tick() end
+                if tick() - lastFind > RESCAN_INT then scanNPCs(true); lastFind = tick() end
                 local t = npcCache
                 local fired = attackBatch(t) or 0
                 task.wait(atkInterval(fired))
@@ -492,12 +482,40 @@ toggle(Tabs.Combat, "KillauraToggle", "Killaura", function(v)
         npcCache, lastFind, cachedWeapon = {}, 0, nil
     end
 end)
+
+toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v) config.isTeleportEnabled = v end)
+
+toggle(Tabs.Main, "AutoVoteToggle", "Auto Vote Waves", function(v) config.isAutoVoteEnabled = v end)
+
+-- COMBAT TAB: Weapon/damage mechanics
+toggle(Tabs.Combat, "MercyKillToggle", "Mercy Kill", function(v)
+    config.isMercyKillEnabled = v
+    if v and config.isMercyKillMouseEnabled then config.isMercyKillMouseEnabled = false; Tabs.Combat:SetValue("MouseMercyKillToggle", false) end
+end)
+
+toggle(Tabs.Combat, "MouseMercyKillToggle", "Mercy Kill (Mouse)", function(v)
+    config.isMercyKillMouseEnabled = v
+    if v then
+        if config.isMercyKillEnabled then config.isMercyKillEnabled = false; Tabs.Combat:SetValue("MercyKillToggle", false) end
+        notify("Mercy Kill (Mouse)", "Hold semicolon to fire at mouse", 4)
+    end
+end)
+
 toggle(Tabs.Combat, "DamageMultiplierToggle", "Damage Multiplier",
     function(v) _G.multiplier = v; if v then setupMultiplier() else cleanupMultiplier() end end)
-toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v) config.pdcChargesEnabled = v end)
-toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v) config.superWeaponsEnabled = v end)
 
-Tabs.Combat:AddButton({Title="Spawn Noob Units", Description="Spawns all standard noob units to workspace", Callback=function()
+toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v) config.isPDCChargesEnabled = v end)
+
+toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v) config.isSuperWeaponsEnabled = v end)
+
+-- TARGETING TAB: Enemy detection & management
+Tabs.Targeting:AddSection("NPC Management")
+Tabs.Targeting:AddButton({Title="Refresh NPC Cache", Description="Force refresh the NPC detection cache", Callback=function()
+    scanNPCs(true)
+    notify("System", "NPC cache refreshed", 3)
+end})
+
+Tabs.Targeting:AddButton({Title="Spawn Noob Units", Description="Spawns all standard noob units to workspace", Callback=function()
     local ex = {Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1, Achilles=1, Confidant=1, London=1, Tank=1, Platform=1, Man=1, MangleNether345=1, MegaJoe=1, Administrator=1}
     local count = 0
     for _, v in ipairs(game:GetService("ReplicatedStorage").Units.Noobs:GetChildren()) do
@@ -509,16 +527,18 @@ Tabs.Combat:AddButton({Title="Spawn Noob Units", Description="Spawns all standar
     notify("Spawn Noob Units", "Spawned " .. count .. " unit" .. (count==1 and "" or "s"), 4)
 end})
 
-toggle(Tabs.Misc, "LandmineToggle", "Destroy Landmine", function(v) config.destroyLandmines = v end)
-toggle(Tabs.Misc, "BolterCoinToggle", "Bolter Coin Hit (Hold Q)", function(v) config.bolterCoinHit = v end)
-toggle(Tabs.Misc, "AutoVoteToggle", "Auto Vote Waves", function(v) config.autoVoteWaves = v end)
+-- UTILITY TAB: One-off actions & tools
+toggle(Tabs.Utility, "LandmineToggle", "Destroy Landmines", function(v) config.shouldDestroyLandmines = v end)
 
-Tabs.Misc:AddSection("Teleportation")
-Tabs.Misc:AddButton({Title="Teleport to Lobby", Description="Teleports to lobby ingame", Callback=function()
+toggle(Tabs.Utility, "BolterCoinToggle", "Bolter Coin Hit (Hold Q)", function(v) config.isBolterCoinHitEnabled = v end)
+
+Tabs.Utility:AddSection("Teleportation")
+Tabs.Utility:AddButton({Title="Teleport to Lobby", Description="Teleports to lobby ingame", Callback=function()
     local hrp = getHRP()
     if hrp then hrp.CFrame = CFrame.new(-3, -101.5, -12.5); notify("System", "Teleported to lobby", 4) end
 end})
-Tabs.Misc:AddButton({Title="Teleport to Map", Description="Teleports player to map", Callback=function()
+
+Tabs.Utility:AddButton({Title="Teleport to Map", Description="Teleports player to map", Callback=function()
     pcall(function()
         local hrp = LP.Character and LP.Character:WaitForChild("HumanoidRootPart")
         local sp = workspace.Map and workspace.Map.PlayerSpawns and workspace.Map.PlayerSpawns.SpawnLocation
@@ -526,8 +546,8 @@ Tabs.Misc:AddButton({Title="Teleport to Map", Description="Teleports player to m
     end)
 end})
 
-Tabs.Misc:AddSection("Utility")
-Tabs.Misc:AddButton({Title="Dev Tools", Description="Developer tools and utilities", Callback=function()
+Tabs.Utility:AddSection("Developer Tools")
+Tabs.Utility:AddButton({Title="Dev Tools", Description="Developer tools and utilities", Callback=function()
     Window:Dialog({Title="Developer Tools", Buttons={
         {Title="Dark Dex", Callback=function() loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/aaaaaaaaaaaaaa/main/darkdex"))() end},
         {Title="Remote Spy", Callback=function() loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/78n/SimpleSpy/main/SimpleSpyBeta.lua"))() end},
@@ -535,9 +555,9 @@ Tabs.Misc:AddButton({Title="Dev Tools", Description="Developer tools and utiliti
     }})
 end})
 
-Tabs.Misc:AddSection("Proximity prompt")
+Tabs.Utility:AddSection("Proximity Prompts")
 for _, a in ipairs({{"Modifier","Fires the Modifier prompt"},{"Armoury","Fires the Armoury prompt"},{"Ammo Fabricator","Fires the Ammo Fabricator prompt"}}) do
-    Tabs.Misc:AddButton({Title=a[1], Description=a[2], Callback=function() firePrompt(a[1]) end})
+    Tabs.Utility:AddButton({Title=a[1], Description=a[2], Callback=function() firePrompt(a[1]) end})
 end
 
 notify("Fluent", "Script loaded!", 8)
