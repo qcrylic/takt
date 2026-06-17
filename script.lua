@@ -500,7 +500,7 @@ end)
 
 -- UI
 local Window = Fluent:CreateWindow({
-    Title = game:GetService("MarketplaceService"):GetProductInfo(16732694052).Name .." | qcrylic - Premium", SubTitle = "@qcrylic", TabWidth = 160,
+    Title = "Dummies Versus Noobs | qcrylic - Premium", SubTitle = "@qcrylic", TabWidth = 160,
     Size = UDim2.fromOffset(580, 460), Acrylic = false, Theme = "Aqua",
     MinimizeKey = Enum.KeyCode.LeftControl,
 })
