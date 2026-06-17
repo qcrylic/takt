@@ -2,6 +2,36 @@ if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
+-- =====================================================================
+-- FIX #2: Cleanup resources from any prior script execution to prevent
+-- duplicate infinite loops, orphaned connections, and zombie GUIs.
+-- =====================================================================
+do
+    -- Kill old killaura thread
+    if getgenv()._killauraThread then
+        pcall(coroutine.close, getgenv()._killauraThread)
+        getgenv()._killauraThread = nil
+    end
+    -- Disconnect old event connections
+    for _, key in ipairs({"_heartbeatConn","_inputBeganConn","_inputEndedConn",
+                         "_wsChildAddedConn","_wsChildRemovedConn"}) do
+        if getgenv()[key] then
+            pcall(function() getgenv()[key]:Disconnect() end)
+            getgenv()[key] = nil
+        end
+    end
+    -- Destroy old HUD GUI
+    if getgenv()._hudGui then
+        pcall(function() getgenv()._hudGui:Destroy() end)
+        getgenv()._hudGui = nil
+    end
+    -- Reset task.spawn loop guards so the new instance claims them
+    getgenv()._pdcAttrLoop = nil
+    getgenv()._mercyMouseLoop = nil
+    getgenv()._bolterLoop = nil
+    getgenv()._autoVoteLoop = nil
+end
+
 local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
@@ -27,7 +57,7 @@ if DeviceType == "Mobile" then
     MainFrame.Parent = ClickButton
     MainFrame.AnchorPoint = Vector2.new(1, 0)
     MainFrame.BackgroundTransparency = 0.8
-    MainFrame.BackgroundColor3 = Color3.fromRGB(38, 38, 38) 
+    MainFrame.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
     MainFrame.BorderSizePixel = 0
     MainFrame.Position = UDim2.new(1, -60, 0, 10)
     MainFrame.Size = UDim2.new(0, 45, 0, 45)
@@ -85,7 +115,7 @@ getgenv().config = config
 
 local cachedWeapon, lastFind, killauraOn, killauraThread = nil, 0, false, nil
 local swingN, semiDown, qDown, mercyBusy = 0, false, false, false
-local mtModified, mt, origNamecall = false, nil, nil
+local mtModified, mt, origNamecall, savedHook = false, nil, nil, nil
 local currentTarget, locked, bursting = nil, false, false
 local npcCache, npcStale = {}, true
 
@@ -108,12 +138,14 @@ local function liveHumanoid(model)
     if h and h.Health > 0 then return h end
 end
 
--- Cache invalidation: model add/remove or humanoid death triggers a rescan
-workspace.ChildAdded:Connect(function(c) if c:IsA("Model") then npcStale = true end end)
-workspace.ChildRemoved:Connect(function(c) if c:IsA("Model") then npcStale = true end end)
+-- FIX #2: Store connections in getgenv() so re-execution can disconnect them
+getgenv()._wsChildAddedConn = workspace.ChildAdded:Connect(function(c)
+    if c:IsA("Model") then npcStale = true end
+end)
+getgenv()._wsChildRemovedConn = workspace.ChildRemoved:Connect(function(c)
+    if c:IsA("Model") then npcStale = true end
+end)
 
--- Adds a live humanoid entry to the cache with death-listener invalidation.
--- Returns true if an entry was actually added (humanoid was alive).
 local function cacheAdd(out, model, h)
     if not h then return false end
     h.Died:Once(function() npcStale = true end)
@@ -121,8 +153,6 @@ local function cacheAdd(out, model, h)
     return true
 end
 
--- Scans a model's direct children matching name pattern `^pat$` for live humanoids.
--- Returns true if at least one was cached.
 local function scanChildren(out, parent, model, pat)
     local found = false
     for _, m in ipairs(parent:GetChildren()) do
@@ -137,24 +167,24 @@ local function scanNPCs(force)
     if not force and not npcStale then return npcCache end
     local out, children = {}, workspace:GetChildren()
 
-    -- Pass 1: Hermes units — target individual launchers when alive,
-    -- fall back to the Hermes body itself when all launchers are dead.
-    for _, d in ipairs(workspace:GetDescendants()) do
-        if d:IsA("Model") and d.Name == "Hermes" then
-            if not scanChildren(out, d, d, "^Launcher%d+$") then
-                cacheAdd(out, d, liveHumanoid(d))
+    -- FIX #10: Use cached children table instead of workspace:GetDescendants()
+    -- for Hermes scan. Hermes models are direct children of workspace (same as
+    -- all other NPC types in passes 2 & 3), so GetDescendants() was a redundant
+    -- full tree walk that allocated a large table every 0.3s.
+    for _, m in ipairs(children) do
+        if m:IsA("Model") and m.Name == "Hermes" then
+            if not scanChildren(out, m, m, "^Launcher%d+$") then
+                cacheAdd(out, m, liveHumanoid(m))
             end
         end
     end
 
-    -- Pass 2: Drones
     for _, m in ipairs(children) do
         if m:IsA("Model") and m.Name == "Drone" then
             cacheAdd(out, m, liveHumanoid(m))
         end
     end
 
-    -- Pass 3: Standard ground combat (tanks, APU, platforms, etc.)
     for _, m in ipairs(children) do
         if m:IsA("Model") and not Players:GetPlayerFromCharacter(m)
             and m.Name ~= "Model" and m.Name ~= "Folder" and not EXCLUDED[m.Name] then
@@ -219,8 +249,11 @@ local function firePrompt(name)
     notify("Automation Error", "Prompt not found: " .. name, 4)
 end
 
+-- FIX #1: Verify cached weapon is still in the player's character, not just
+-- parented somewhere. Dropping a weapon leaves it parented to workspace,
+-- causing the old remote to be fired instead of the newly equipped one.
 local function refreshWeapon()
-    if cachedWeapon and cachedWeapon.Parent then return cachedWeapon end
+    if cachedWeapon and cachedWeapon.Parent == LP.Character then return cachedWeapon end
     local function findIn(c)
         if not c then return end
         for _, t in ipairs(c:GetChildren()) do
@@ -234,7 +267,11 @@ local function refreshWeapon()
     return cachedWeapon
 end
 
+-- FIX #3: When there are zero targets, return RESCAN_INT instead of ATK_MIN.
+-- Previously atkInterval(0) returned the fastest interval (0.07s), causing
+-- the killaura to spin at max speed doing nothing when no enemies exist.
 local function atkInterval(n)
+    if n == 0 then return RESCAN_INT end
     if n <= THRESH_LO then return ATK_MIN end
     if n >= THRESH_HI then return ATK_BASE end
     return ATK_MIN + (ATK_BASE - ATK_MIN) * ((n - THRESH_LO) / (THRESH_HI - THRESH_LO))
@@ -260,10 +297,13 @@ local hudGui, hudCont, hudBg, hudStroke, hudLabel, hudHide, hudShown
 local function initHUD()
     hudGui = Instance.new("ScreenGui")
     hudGui.Name, hudGui.ResetOnSpawn, hudGui.DisplayOrder, hudGui.Parent = "KillauraHUD", false, 100, game:GetService("CoreGui")
+    getgenv()._hudGui = hudGui  -- FIX #2: Track for cleanup on re-execution
+
     hudCont = Instance.new("Frame")
     hudCont.AnchorPoint, hudCont.BackgroundTransparency = Vector2.new(1,0), 1
-    hudCont.Size, hudCont.AutomaticSize = UDim2.new(HUD_W,0,0,0), Enum.AutomaticSize.Y
+    hudCont.AutomaticSize = Enum.AutomaticSize.Y
     hudCont.Position, hudCont.Parent = UDim2.new(1,HUD_OFF,HUD_Y,0), hudGui
+
     hudBg = Instance.new("Frame")
     hudBg.BackgroundColor3, hudBg.BackgroundTransparency, hudBg.BorderSizePixel = Color3.fromRGB(12,12,18), 1, 0
     hudBg.AutomaticSize, hudBg.Size, hudBg.Parent = Enum.AutomaticSize.Y, UDim2.new(1,0,0,0), hudCont
@@ -303,9 +343,17 @@ local function showHUD(counts)
     lines[#lines+1] = string.format("<font size='13' face='GothamBold'>Total: %d target%s</font>", total, total==1 and "" or "s")
     hudLabel.Text = table.concat(lines, "\n")
 
+    -- FIX #5: Strip rich text tags before measuring text width. GetTextSize may
+    -- measure literal tag characters, inflating the computed width.
     local vp = workspace.CurrentCamera.ViewportSize
-    local tw = TextService:GetTextSize(hudLabel.Text, hudLabel.TextSize, hudLabel.Font, Vector2.new(math.huge, math.huge)).X
-    hudCont.Size = UDim2.new(0, math.clamp(tw + 32, HUD_W * vp.X, HUD_WMAX * vp.X), 0, 0)
+    local stripped = hudLabel.Text:gsub("<[^>]+>", "")
+    local tw = TextService:GetTextSize(stripped, hudLabel.TextSize, hudLabel.Font, Vector2.new(math.huge, math.huge)).X
+
+    -- FIX #4: Keep sizing as a scale fraction so the HUD adapts to resolution
+    -- changes. Previously the first showHUD call converted to absolute pixels,
+    -- which broke on window resize or display change.
+    local fraction = math.clamp((tw + 32) / vp.X, HUD_W, HUD_WMAX)
+    hudCont.Size = UDim2.new(fraction, 0, 0, 0)
 
     if hudHide then task.cancel(hudHide); hudHide = nil end
     if not hudShown then
@@ -353,17 +401,29 @@ end
 -- Damage multiplier
 local function resetBurst() currentTarget, locked, bursting = nil, false, false end
 
+-- FIX #9: Only restore our hook on cleanup if it's still the active one.
+-- If another script hooked __namecall after us, blindly restoring would
+-- destroy their hook. Instead, check mt.__namecall == savedHook first.
 local function cleanupMultiplier()
     if not mtModified then return end
-    pcall(function() setreadonly(mt, false); mt.__namecall = origNamecall; setreadonly(mt, true) end)
+    pcall(function()
+        setreadonly(mt, false)
+        if mt.__namecall == savedHook then
+            mt.__namecall = origNamecall
+        end
+        setreadonly(mt, true)
+    end)
     resetBurst(); mtModified = false
 end
 
+-- FIX #7: During the burst re-fire loop, verify that the weapon remote (self)
+-- is still a descendant of the player's character. If the player swaps weapons
+-- mid-burst, 'self' points to the old tool's remote, producing invalid hits.
 local function setupMultiplier()
     if mtModified then cleanupMultiplier() end
     pcall(function()
         mt = getrawmetatable(game); setreadonly(mt, false); origNamecall = mt.__namecall
-        mt.__namecall = newcclosure(function(self, ...)
+        savedHook = newcclosure(function(self, ...)
             local method, args = getnamecallmethod(), {...}
             if _G.multiplier and method == "FireServer" and tostring(self) == "VerifyHit"
                 and LP.Character and self:IsDescendantOf(LP.Character) then
@@ -373,6 +433,11 @@ local function setupMultiplier()
                     task.spawn(function()
                         local n, active = 1, currentTarget
                         while locked and active == currentTarget do
+                            -- FIX #7: Abort burst if weapon was swapped
+                            if not self:IsDescendantOf(LP.Character) then
+                                if active == currentTarget then resetBurst() end
+                                break
+                            end
                             if not active.Parent or active.Health <= 0 then
                                 if active == currentTarget then resetBurst() end break
                             end
@@ -397,12 +462,18 @@ local function setupMultiplier()
             end
             return origNamecall(self, ...)
         end)
+        mt.__namecall = savedHook
         setreadonly(mt, true); mtModified = true
     end)
 end
 
--- PDC / Super weapons loop
+-- FIX #2: Guard each task.spawn loop against duplication on re-execution.
+-- Without guards, each script re-run spawns a second parallel loop, and
+-- after N reloads there are N independent loops running at 40 Hz each.
+
 task.spawn(function()
+    if getgenv()._pdcAttrLoop then return end
+    getgenv()._pdcAttrLoop = true
     while true do
         if config.isPDCChargesEnabled or config.isSuperWeaponsEnabled then
             local t = LP.Character and LP.Character:FindFirstChildOfClass("Tool")
@@ -426,7 +497,8 @@ local function findMercy()
         or (LP.Character and LP.Character:FindFirstChild("Mercy Kill"))
 end
 
-UIS.InputBegan:Connect(function(input, gp)
+-- FIX #2: Store input connections so re-execution can disconnect them
+getgenv()._inputBeganConn = UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.Semicolon then
         semiDown = true
@@ -449,12 +521,14 @@ UIS.InputBegan:Connect(function(input, gp)
     elseif input.KeyCode == Enum.KeyCode.Q then qDown = true end
 end)
 
-UIS.InputEnded:Connect(function(input)
+getgenv()._inputEndedConn = UIS.InputEnded:Connect(function(input)
     if input.KeyCode == Enum.KeyCode.Semicolon then semiDown = false
     elseif input.KeyCode == Enum.KeyCode.Q then qDown = false end
 end)
 
 task.spawn(function()
+    if getgenv()._mercyMouseLoop then return end
+    getgenv()._mercyMouseLoop = true
     while true do
         if config.isMercyKillMouseEnabled and semiDown then
             local pos, mk = mousePos(), findMercy()
@@ -465,6 +539,8 @@ task.spawn(function()
 end)
 
 task.spawn(function()
+    if getgenv()._bolterLoop then return end
+    getgenv()._bolterLoop = true
     while true do
         if config.isBolterCoinHitEnabled and qDown then
             local pos = mousePos()
@@ -476,18 +552,30 @@ task.spawn(function()
     end
 end)
 
+-- FIX #11: Check if the Vote remote exists before attempting to call it.
+-- When the player is in the lobby or between games, the remote may not exist.
+-- The old code relied on pcall to swallow the error, but the InvokeServer call
+-- still fired against the missing remote path, producing unnecessary work.
 task.spawn(function()
+    if getgenv()._autoVoteLoop then return end
+    getgenv()._autoVoteLoop = true
     while true do
         if config.isAutoVoteEnabled then
-            pcall(function() game:GetService("ReplicatedStorage").Remotes.Waves.Vote:InvokeServer() end)
+            pcall(function()
+                local rs = game:GetService("ReplicatedStorage")
+                local vote = rs:FindFirstChild("Remotes")
+                    and rs.Remotes:FindFirstChild("Waves")
+                    and rs.Remotes.Waves:FindFirstChild("Vote")
+                if vote then vote:InvokeServer() end
+            end)
         end
         task.wait(VOTE_DLY)
     end
 end)
 
--- Main loop
+-- Main loop — FIX #2: Store connection for cleanup on re-execution
 local tpTh, mineTh = 0, 0
-RunService.Heartbeat:Connect(function(dt)
+getgenv()._heartbeatConn = RunService.Heartbeat:Connect(function(dt)
     if config.isTeleportEnabled then
         tpTh = tpTh + dt
         if tpTh >= TP_DLY then tpTh = 0; bringNPCs() end
@@ -504,7 +592,7 @@ local Window = Fluent:CreateWindow({
     Size = UDim2.fromOffset(580, 460), Acrylic = false, Theme = "Aqua",
     MinimizeKey = Enum.KeyCode.LeftControl,
 })
-local Tabs = { -- https://lucide.dev/icons/
+local Tabs = {
     Main      = Window:AddTab({Title="Main",      Icon="list"}),
     Combat    = Window:AddTab({Title="Combat",    Icon="sword"}),
     Targeting = Window:AddTab({Title="Targeting", Icon="target"}),
@@ -520,12 +608,11 @@ local function toggle(tab, name, title, cb)
     tab:AddToggle(name, {Title=title, Default=false}):OnChanged(cb)
 end
 
--- MAIN TAB: Core toggle features
 toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
     killauraOn = v
     config.killauraEnabled = v
     if killauraOn then
-        if killauraThread then coroutine.close(killauraThread); killauraThread = nil end
+        if killauraThread then pcall(coroutine.close, killauraThread); killauraThread = nil end
         killauraThread = coroutine.create(function()
             while killauraOn do
                 if tick() - lastFind > RESCAN_INT then scanNPCs(true); lastFind = tick() end
@@ -534,9 +621,11 @@ toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
                 task.wait(atkInterval(fired))
             end
         end)
+        getgenv()._killauraThread = killauraThread  -- FIX #2: Track for re-execution cleanup
         coroutine.resume(killauraThread)
     else
-        if killauraThread then coroutine.close(killauraThread); killauraThread = nil end
+        if killauraThread then pcall(coroutine.close, killauraThread); killauraThread = nil end
+        getgenv()._killauraThread = nil
         npcCache, lastFind, cachedWeapon = {}, 0, nil
     end
 end)
@@ -545,7 +634,6 @@ toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v) config.isTeleport
 
 toggle(Tabs.Main, "AutoVoteToggle", "Auto Vote Waves", function(v) config.isAutoVoteEnabled = v end)
 
--- COMBAT TAB: Weapon/damage mechanics
 toggle(Tabs.Combat, "MercyKillToggle", "Mercy Kill", function(v)
     config.isMercyKillEnabled = v
     if v and config.isMercyKillMouseEnabled then config.isMercyKillMouseEnabled = false; Tabs.Combat:SetValue("MouseMercyKillToggle", false) end
@@ -566,7 +654,6 @@ toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v) config.isPDC
 
 toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v) config.isSuperWeaponsEnabled = v end)
 
--- TARGETING TAB: Enemy detection & management
 Tabs.Targeting:AddSection("NPC Management")
 Tabs.Targeting:AddButton({Title="Refresh NPC Cache", Description="Force refresh the NPC detection cache", Callback=function()
     scanNPCs(true)
@@ -585,7 +672,6 @@ Tabs.Targeting:AddButton({Title="Spawn Noob Units", Description="Spawns all stan
     notify("Spawn Noob Units", "Spawned " .. count .. " unit" .. (count==1 and "" or "s"), 4)
 end})
 
--- UTILITY TAB: One-off actions & tools
 toggle(Tabs.Utility, "LandmineToggle", "Destroy Landmines", function(v) config.shouldDestroyLandmines = v end)
 
 toggle(Tabs.Utility, "BolterCoinToggle", "Bolter Coin Hit (Hold Q)", function(v) config.isBolterCoinHitEnabled = v end)
