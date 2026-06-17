@@ -462,15 +462,15 @@ local function toggle(tab, name, title, cb)
 end
 
 toggle(Tabs.Main, "TeleportNPCsToggle", "Teleport NPCs", function(v) config.teleportEnabled = v end)
-toggle(Tabs.Main, "MercyKillToggle", "Enable Mercy Kill", function(v)
+toggle(Tabs.Main, "MercyKillToggle", "Mercy Kill", function(v)
     config.mercyKillEnabled = v
     if v and config.mercyKillMouseEnabled then config.mercyKillMouseEnabled = false; Tabs.Main:SetValue("MouseMercyKillToggle", false) end
 end)
-toggle(Tabs.Main, "MouseMercyKillToggle", "Enable Mouse Mercy Kill", function(v)
+toggle(Tabs.Main, "MouseMercyKillToggle", "Mercy Kill (Mouse)", function(v)
     config.mercyKillMouseEnabled = v
     if v then
         if config.mercyKillEnabled then config.mercyKillEnabled = false; Tabs.Main:SetValue("MercyKillToggle", false) end
-        notify("Mercy Kill Mouse", "Hold semicolon to fire at mouse", 4)
+        notify("Mercy Kill (Mouse)", "Hold semicolon to fire at mouse", 4)
     end
 end)
 
@@ -494,8 +494,8 @@ toggle(Tabs.Combat, "KillauraToggle", "Killaura", function(v)
 end)
 toggle(Tabs.Combat, "DamageMultiplierToggle", "Damage Multiplier",
     function(v) _G.multiplier = v; if v then setupMultiplier() else cleanupMultiplier() end end)
-toggle(Tabs.Combat, "PDCChargesToggle", "PDC Charges", function(v) config.pdcChargesEnabled = v end)
-toggle(Tabs.Combat, "SuperWeaponsToggle", "Super Weapons (Infinite Ammo)", function(v) config.superWeaponsEnabled = v end)
+toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v) config.pdcChargesEnabled = v end)
+toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v) config.superWeaponsEnabled = v end)
 
 Tabs.Combat:AddButton({Title="Spawn Noob Units", Description="Spawns all standard noob units to workspace", Callback=function()
     local ex = {Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1, Achilles=1, Confidant=1, London=1, Tank=1, Platform=1, Man=1, MangleNether345=1, MegaJoe=1, Administrator=1}
@@ -535,7 +535,7 @@ Tabs.Misc:AddButton({Title="Dev Tools", Description="Developer tools and utiliti
     }})
 end})
 
-Tabs.Misc:AddSection("Station Automation")
+Tabs.Misc:AddSection("Proximity prompt")
 for _, a in ipairs({{"Modifier","Fires the Modifier prompt"},{"Armoury","Fires the Armoury prompt"},{"Ammo Fabricator","Fires the Ammo Fabricator prompt"}}) do
     Tabs.Misc:AddButton({Title=a[1], Description=a[2], Callback=function() firePrompt(a[1]) end})
 end
