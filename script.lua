@@ -63,6 +63,7 @@ if DeviceType == "Mobile" then
         game:GetService("VirtualInputManager"):SendKeyEvent(false, "LeftControl", false, game)
     end)
 end
+
 local TANK_DIST, DEFAULT_DIST = 13, 5.7
 local ATK_BASE, ATK_MIN, RESCAN_INT, THRESH_HI, THRESH_LO = 0.18, 0.07, 0.3, 8, 2
 local BURST_CAP, BURST_DELAY, ATTR_INT = 150, 0.01, 0.1
