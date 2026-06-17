@@ -500,7 +500,7 @@ local Window = Fluent:CreateWindow({
     MinimizeKey = Enum.KeyCode.LeftControl,
 })
 local Tabs = {
-    Main      = Window:AddTab({Title="Main",      Icon="zap"}),
+    Main      = Window:AddTab({Title="Main",      Icon="list"}),
     Combat    = Window:AddTab({Title="Combat",    Icon="sword"}),
     Targeting = Window:AddTab({Title="Targeting", Icon="target"}),
     Utility   = Window:AddTab({Title="Utility",   Icon="plus-circle"}),
