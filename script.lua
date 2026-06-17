@@ -498,7 +498,7 @@ toggle(Tabs.Combat, "PDCChargesToggle", "PDC Charges", function(v) config.pdcCha
 toggle(Tabs.Combat, "SuperWeaponsToggle", "Super Weapons (Infinite Ammo)", function(v) config.superWeaponsEnabled = v end)
 
 Tabs.Combat:AddButton({Title="Spawn Noob Units", Description="Spawns all standard noob units to workspace", Callback=function()
-    local ex = {Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1, Achilles=1, Confidant=1, London=1}
+    local ex = {Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1, Achilles=1, Confidant=1, London=1, Tank=1, Platform=1, Man=1, MangleNether345=1, MegaJoe=1, Administrator=1}
     local count = 0
     for _, v in ipairs(game:GetService("ReplicatedStorage").Units.Noobs:GetChildren()) do
         if not ex[v.Name] then
