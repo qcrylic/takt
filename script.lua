@@ -500,20 +500,16 @@ end)
 
 -- UI
 local Window = Fluent:CreateWindow({
-    Title = "Dummies Versus Noobs | qcrylic - Premium", 
-    SubTitle = "@qcrylic", 
-    TabWidth = 160,
-    Size = UDim2.fromOffset(580, 460), 
-    Acrylic = false, 
-    Theme = "Aqua",
-    MinimizeKey = Enum.KeyCode.LeftControl,
+    Title = "Dummies Versus Noobs | qcrylic - Premium", SubTitle = "@qcrylic", TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460), Acrylic = false, Theme = "Aqua", MinimizeKey = Enum.KeyCode.LeftControl,
 })
-local startTime = tick()
+
+local label = Window:AddLabel("")
+local start = tick()
+
 game:GetService("RunService").Heartbeat:Connect(function()
-    local elapsed = tick() - startTime
-    local minutes = math.floor(elapsed / 60)
-    local seconds = math.floor(elapsed % 60)
-    Window.Title:SetText(string.format("Dummies Versus Noobs | qcrylic - Premium ⏱️ %02d:%02d", minutes, seconds))
+    local e = tick() - start
+    label:SetText(string.format("⏱️ %02d:%02d", math.floor(e / 60), math.floor(e % 60)))
 end)
 local Tabs = { -- https://lucide.dev/icons/
     Main      = Window:AddTab({Title="Main",      Icon="list"}),
