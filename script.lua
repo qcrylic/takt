@@ -1,3 +1,7 @@
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
 local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
@@ -495,11 +499,11 @@ end)
 
 -- UI
 local Window = Fluent:CreateWindow({
-    Title = "Fluent " .. Fluent.Version, SubTitle = "by dawid", TabWidth = 160,
-    Size = UDim2.fromOffset(580, 460), Acrylic = false, Theme = "Aqua",
+    Title = game:GetService("MarketplaceService"):GetProductInfo(16732694052).Name .." | qcrylic - Premium", SubTitle = "@qcrylic", TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460), Acrylic = false, Theme = "Aqua"
     MinimizeKey = Enum.KeyCode.LeftControl,
 })
-local Tabs = {
+local Tabs = { -- https://lucide.dev/icons/
     Main      = Window:AddTab({Title="Main",      Icon="list"}),
     Combat    = Window:AddTab({Title="Combat",    Icon="sword"}),
     Targeting = Window:AddTab({Title="Targeting", Icon="target"}),
