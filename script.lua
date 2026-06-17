@@ -3,38 +3,19 @@ if not game:IsLoaded() then
 end
 
 -- =====================================================================
--- Teardown resources from any prior script execution to prevent
--- duplicate infinite loops, orphaned connections, and zombie GUIs.
--- Uses a version counter: incrementing it causes all old task.spawn
--- loops to detect the change and exit gracefully on their next
--- task.wait return.
+-- Teardown: disconnect old connections, close old threads, destroy old
+-- GUIs. Background loops are NOT killed — they read shared state and
+-- work correctly across re-executions. Boolean guards prevent duplicates.
 -- =====================================================================
 do
-    -- Increment version — old loops detect this and self-terminate
-    getgenv()._loopVersion = (getgenv()._loopVersion or 0) + 1
-
-    -- Kill old killaura coroutine thread
-    if getgenv()._killauraThread then
-        pcall(coroutine.close, getgenv()._killauraThread)
-        getgenv()._killauraThread = nil
-    end
-    -- Disconnect old event connections
-    for _, key in ipairs({
-        "_heartbeatConn", "_inputBeganConn", "_inputEndedConn",
-        "_wsChildAddedConn", "_wsChildRemovedConn"
-    }) do
-        if getgenv()[key] then
-            pcall(function() getgenv()[key]:Disconnect() end)
-            getgenv()[key] = nil
-        end
-    end
-    -- Destroy old GUIs
-    for _, key in ipairs({"_hudGui", "_mobileGui"}) do
-        if getgenv()[key] then
-            pcall(function() getgenv()[key]:Destroy() end)
-            getgenv()[key] = nil
-        end
-    end
+    if getgenv()._killauraThread then pcall(coroutine.close, getgenv()._killauraThread) end
+    if getgenv()._heartbeatConn then pcall(function() getgenv()._heartbeatConn:Disconnect() end) end
+    if getgenv()._inputBeganConn then pcall(function() getgenv()._inputBeganConn:Disconnect() end) end
+    if getgenv()._inputEndedConn then pcall(function() getgenv()._inputEndedConn:Disconnect() end) end
+    if getgenv()._wsChildAddedConn then pcall(function() getgenv()._wsChildAddedConn:Disconnect() end) end
+    if getgenv()._wsChildRemovedConn then pcall(function() getgenv()._wsChildRemovedConn:Disconnect() end) end
+    if getgenv()._hudGui then pcall(function() getgenv()._hudGui:Destroy() end) end
+    if getgenv()._mobileGui then pcall(function() getgenv()._mobileGui:Destroy() end) end
 end
 
 local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua"))()
@@ -57,7 +38,6 @@ if DeviceType == "Mobile" then
     ClickButton.Name = "ClickButton"
     ClickButton.Parent = game.CoreGui
     ClickButton.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    -- Track mobile GUI for teardown on re-execution
     getgenv()._mobileGui = ClickButton
 
     MainFrame.Name = "MainFrame"
@@ -120,8 +100,13 @@ local config = getgenv().config or {
 }
 getgenv().config = config
 
+-- Shared input state — survives re-execution so old mercy/bolter loops
+-- stay functional with the new connections.
+getgenv()._semiDown = false
+getgenv()._qDown = false
+
 local cachedWeapon, lastFind, killauraOn, killauraThread = nil, 0, false, nil
-local swingN, semiDown, qDown, mercyBusy = 0, false, false, false
+local swingN, mercyBusy = 0, false
 local mtModified, mt, origNamecall, savedHook = false, nil, nil, nil
 local currentTarget, locked, bursting = nil, false, false
 local npcCache, npcStale = {}, true
@@ -145,7 +130,6 @@ local function liveHumanoid(model)
     if h and h.Health > 0 then return h end
 end
 
--- Store connections for teardown
 getgenv()._wsChildAddedConn = workspace.ChildAdded:Connect(function(c)
     if c:IsA("Model") then npcStale = true end
 end)
@@ -174,8 +158,7 @@ local function scanNPCs(force)
     if not force and not npcStale then return npcCache end
     local out, children = {}, workspace:GetChildren()
 
-    -- Pass 1: Hermes units — use GetDescendants because Hermes models may be
-    -- nested inside containers in some game versions.
+    -- Pass 1: Hermes — GetDescendants because they may be nested in containers.
     for _, d in ipairs(workspace:GetDescendants()) do
         if d:IsA("Model") and d.Name == "Hermes" then
             if not scanChildren(out, d, d, "^Launcher%d+$") then
@@ -191,10 +174,8 @@ local function scanNPCs(force)
         end
     end
 
-    -- Pass 3: Standard ground combat (tanks, APU, platforms, etc.)
-    -- FIX (issue 2): Skip "Hermes" here — already handled in Pass 1.
-    -- Without this, Hermes models that are direct children of workspace
-    -- get cached twice (once per pass), doubling killaura hits and HUD counts.
+    -- Pass 3: Ground combat. Skip "Hermes" — already handled in Pass 1,
+    -- would be double-cached otherwise (doubling killaura hits and HUD counts).
     for _, m in ipairs(children) do
         if m:IsA("Model") and not Players:GetPlayerFromCharacter(m)
             and m.Name ~= "Model" and m.Name ~= "Folder" and m.Name ~= "Hermes"
@@ -260,10 +241,9 @@ local function firePrompt(name)
     notify("Automation Error", "Prompt not found: " .. name, 4)
 end
 
--- Verify cached weapon is still in the player's character, not just
--- parented somewhere (dropped weapons remain parented to workspace).
--- Extra truthiness guard prevents nil==nil match when tool is destroyed
--- and LP.Character is nil simultaneously.
+-- Verify cached weapon is still in the player's character. Dropped weapons
+-- remain parented to workspace, which would cause stale remote fires.
+-- Extra truthiness guard prevents nil==nil match if tool destroyed + character nil.
 local function refreshWeapon()
     if cachedWeapon and cachedWeapon.Parent and cachedWeapon.Parent == LP.Character then
         return cachedWeapon
@@ -281,8 +261,7 @@ local function refreshWeapon()
     return cachedWeapon
 end
 
--- When there are zero targets, return RESCAN_INT instead of ATK_MIN to
--- prevent the killaura spinning at max speed doing nothing when empty.
+-- Zero targets → RESCAN_INT to prevent idle spin at max speed.
 local function atkInterval(n)
     if n == 0 then return RESCAN_INT end
     if n <= THRESH_LO then return ATK_MIN end
@@ -306,23 +285,20 @@ local ORDER = { "Launcher1","Launcher2","Launcher3","Launcher4","Hermes","APU","
 local orderSet = {} for _, t in ipairs(ORDER) do orderSet[t] = true end
 
 local hudGui, hudCont, hudBg, hudStroke, hudLabel, hudHide, hudShown
--- Track active fade-out tweens so they can be cancelled when new data arrives
 local fadeTweens = {}
 
 local function cancelFadeTweens()
-    for _, tw in ipairs(fadeTweens) do tw:Cancel() end
+    for _, tw in ipairs(fadeTweens) do pcall(function() tw:Cancel() end) end
     fadeTweens = {}
 end
 
 local function initHUD()
     hudGui = Instance.new("ScreenGui")
     hudGui.Name, hudGui.ResetOnSpawn, hudGui.DisplayOrder, hudGui.Parent = "KillauraHUD", false, 100, game:GetService("CoreGui")
-    -- Track for teardown on re-execution
     getgenv()._hudGui = hudGui
 
     hudCont = Instance.new("Frame")
     hudCont.AnchorPoint, hudCont.BackgroundTransparency = Vector2.new(1,0), 1
-    -- Initial scale-based size (non-zero before first showHUD call)
     hudCont.Size = UDim2.new(HUD_W, 0, 0, 0)
     hudCont.AutomaticSize = Enum.AutomaticSize.Y
     hudCont.Position, hudCont.Parent = UDim2.new(1,HUD_OFF,HUD_Y,0), hudGui
@@ -349,6 +325,7 @@ local function fmtLine(t, count)
         math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255), DISPLAY[t] or t, count)
 end
 
+-- Returns tween objects so callers can track them for cancellation.
 local function tweenProp(inst, info, props)
     local tweens = {}
     for k, v in pairs(props) do
@@ -372,7 +349,7 @@ local function showHUD(counts)
     lines[#lines+1] = string.format("<font size='13' face='GothamBold'>Total: %d target%s</font>", total, total==1 and "" or "s")
     hudLabel.Text = table.concat(lines, "\n")
 
-    -- Strip rich text tags before measuring text width so tags don't inflate measurement
+    -- Strip rich text tags before measuring so tags don't inflate width
     local vp = workspace.CurrentCamera.ViewportSize
     local stripped = hudLabel.Text:gsub("<[^>]+>", "")
     local tw = TextService:GetTextSize(stripped, hudLabel.TextSize, hudLabel.Font, Vector2.new(math.huge, math.huge)).X
@@ -383,18 +360,31 @@ local function showHUD(counts)
 
     if hudHide then task.cancel(hudHide); hudHide = nil end
 
-    -- FIX (issue 3): Cancel any in-progress fade-out tweens and snap HUD back
-    -- to fully visible. Without this, if showHUD is called mid-fade-out, the
-    -- HUD continues disappearing with the new text underneath.
-    cancelFadeTweens()
-    hudCont.Position = UDim2.new(1, 0, HUD_Y, 0)
-    hudBg.BackgroundTransparency = 0.2
-    hudStroke.Transparency = 0.4
-    hudLabel.TextTransparency = 0
-    hudShown = true
+    if hudShown then
+        -- Already visible or mid-fade-out: cancel in-progress fade tweens
+        -- and snap instantly back to fully visible.
+        cancelFadeTweens()
+        hudCont.Position = UDim2.new(1, 0, HUD_Y, 0)
+        hudBg.BackgroundTransparency = 0.2
+        hudStroke.Transparency = 0.4
+        hudLabel.TextTransparency = 0
+    else
+        -- First appearance: slide in with animation
+        hudCont.Position = UDim2.new(1, HUD_OFF, HUD_Y, 0)
+        hudBg.BackgroundTransparency = 1
+        hudStroke.Transparency = 1
+        hudLabel.TextTransparency = 1
+        local si = TweenInfo.new(HUD_SLIDE, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        tweenProp(hudCont, si, {Position=UDim2.new(1,0,HUD_Y,0)})
+        tweenProp(hudBg, si, {BackgroundTransparency=0.2})
+        tweenProp(hudStroke, si, {Transparency=0.4})
+        tweenProp(hudLabel, si, {TextTransparency=0})
+        hudShown = true
+    end
 
     hudHide = task.delay(HUD_LINGER, function()
-        if not hudShown then return end
+        -- Bail if HUD was destroyed by teardown
+        if not hudShown or not hudGui or not hudGui.Parent then return end
         local fi = TweenInfo.new(HUD_FADE, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
         fadeTweens = {}
         for _, tw in ipairs(tweenProp(hudCont, fi, {Position=UDim2.new(1,HUD_OFF,HUD_Y,0)})) do fadeTweens[#fadeTweens+1] = tw end
@@ -429,7 +419,7 @@ end
 -- Damage multiplier
 local function resetBurst() currentTarget, locked, bursting = nil, false, false end
 
--- Only restore our hook if it's still the active one — preserving other
+-- Only restore our hook if it's still the active one, preserving other
 -- scripts' metamethod hooks that may have been applied after ours.
 local function cleanupMultiplier()
     if not mtModified then return end
@@ -444,8 +434,8 @@ local function cleanupMultiplier()
 end
 
 -- During burst re-fire, verify the weapon remote is still a descendant of the
--- player's character each iteration. Abort if player died (LP.Character == nil,
--- which would crash IsDescendantOf) or if the weapon was swapped mid-burst.
+-- player's character each iteration. Abort if player died (LP.Character == nil
+-- would crash IsDescendantOf) or if weapon was swapped mid-burst.
 local function setupMultiplier()
     if mtModified then cleanupMultiplier() end
     pcall(function()
@@ -497,15 +487,14 @@ local function setupMultiplier()
     end)
 end
 
--- Version-guarded loops: each loop captures the current _loopVersion at spawn
--- and checks it on every iteration. When the script re-executes, the teardown
--- block increments _loopVersion, causing all old loops to exit gracefully
--- within one task.wait cycle.
-local function loopVersion() return getgenv()._loopVersion end
+-- Background loops: simple boolean guards. Old instances keep running after
+-- re-execution and remain functional because they only read shared state
+-- (config via getgenv, _semiDown/_qDown via getgenv).
 
 task.spawn(function()
-    local v = loopVersion()
-    while getgenv()._loopVersion == v do
+    if getgenv()._pdcLoopRunning then return end
+    getgenv()._pdcLoopRunning = true
+    while true do
         if config.isPDCChargesEnabled or config.isSuperWeaponsEnabled then
             local t = LP.Character and LP.Character:FindFirstChildOfClass("Tool")
             if t then
@@ -528,11 +517,12 @@ local function findMercy()
         or (LP.Character and LP.Character:FindFirstChild("Mercy Kill"))
 end
 
--- Store input connections for teardown
+-- Input connections: write to shared getgenv state so old mercy/bolter
+-- loops (which survived re-execution) see the updated values.
 getgenv()._inputBeganConn = UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.Semicolon then
-        semiDown = true
+        getgenv()._semiDown = true
         if config.isMercyKillEnabled and not config.isMercyKillMouseEnabled and not mercyBusy then
             local hrp, mk = getHRP(), findMercy()
             if hrp and mk then
@@ -540,7 +530,7 @@ getgenv()._inputBeganConn = UIS.InputBegan:Connect(function(input, gp)
                 task.spawn(function()
                     pcall(function()
                         for _ = 1, MERCY_N do
-                            if not semiDown then return end
+                            if not getgenv()._semiDown then return end
                             mk.VerifyHit:FireServer(nil, hrp.Position)
                             task.wait(MERCY_DLY)
                         end
@@ -549,18 +539,19 @@ getgenv()._inputBeganConn = UIS.InputBegan:Connect(function(input, gp)
                 end)
             end
         end
-    elseif input.KeyCode == Enum.KeyCode.Q then qDown = true end
+    elseif input.KeyCode == Enum.KeyCode.Q then getgenv()._qDown = true end
 end)
 
 getgenv()._inputEndedConn = UIS.InputEnded:Connect(function(input)
-    if input.KeyCode == Enum.KeyCode.Semicolon then semiDown = false
-    elseif input.KeyCode == Enum.KeyCode.Q then qDown = false end
+    if input.KeyCode == Enum.KeyCode.Semicolon then getgenv()._semiDown = false
+    elseif input.KeyCode == Enum.KeyCode.Q then getgenv()._qDown = false end
 end)
 
 task.spawn(function()
-    local v = loopVersion()
-    while getgenv()._loopVersion == v do
-        if config.isMercyKillMouseEnabled and semiDown then
+    if getgenv()._mercyMouseLoopRunning then return end
+    getgenv()._mercyMouseLoopRunning = true
+    while true do
+        if config.isMercyKillMouseEnabled and getgenv()._semiDown then
             local pos, mk = mousePos(), findMercy()
             if pos and mk then mk.VerifyHit:FireServer(nil, pos) end
         end
@@ -569,9 +560,10 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    local v = loopVersion()
-    while getgenv()._loopVersion == v do
-        if config.isBolterCoinHitEnabled and qDown then
+    if getgenv()._bolterLoopRunning then return end
+    getgenv()._bolterLoopRunning = true
+    while true do
+        if config.isBolterCoinHitEnabled and getgenv()._qDown then
             local pos = mousePos()
             local pm = workspace:FindFirstChild(LP.Name)
             local b = pm and pm:FindFirstChild("Bolter")
@@ -582,10 +574,11 @@ task.spawn(function()
 end)
 
 -- Check Vote remote exists before calling to avoid spamming a nonexistent
--- remote when the player is in the lobby or between games.
+-- remote in the lobby or between games.
 task.spawn(function()
-    local v = loopVersion()
-    while getgenv()._loopVersion == v do
+    if getgenv()._autoVoteLoopRunning then return end
+    getgenv()._autoVoteLoopRunning = true
+    while true do
         if config.isAutoVoteEnabled then
             pcall(function()
                 local rs = game:GetService("ReplicatedStorage")
@@ -599,7 +592,6 @@ task.spawn(function()
     end
 end)
 
--- Main heartbeat loop — stored for teardown
 local tpTh, mineTh = 0, 0
 getgenv()._heartbeatConn = RunService.Heartbeat:Connect(function(dt)
     if config.isTeleportEnabled then
@@ -647,7 +639,6 @@ toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
                 task.wait(atkInterval(fired))
             end
         end)
-        -- Track for teardown
         getgenv()._killauraThread = killauraThread
         coroutine.resume(killauraThread)
     else
@@ -661,20 +652,25 @@ toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v) config.isTeleport
 
 toggle(Tabs.Main, "AutoVoteToggle", "Auto Vote Waves", function(v) config.isAutoVoteEnabled = v end)
 
-toggle(Tabs.Combat, "MercyKillToggle", "Mercy Kill", function(v)
+-- Store toggle references so mutual exclusion calls SetValue on the toggle
+-- object, not on the Tab container (which doesn't have SetValue).
+local mercyToggle = Tabs.Combat:AddToggle("MercyKillToggle", {Title="Mercy Kill", Default=false})
+local mouseMercyToggle = Tabs.Combat:AddToggle("MouseMercyKillToggle", {Title="Mercy Kill (Mouse)", Default=false})
+
+mercyToggle:OnChanged(function(v)
     config.isMercyKillEnabled = v
     if v and config.isMercyKillMouseEnabled then
         config.isMercyKillMouseEnabled = false
-        Tabs.Combat:SetValue("MouseMercyKillToggle", false)
+        mouseMercyToggle:SetValue(false)
     end
 end)
 
-toggle(Tabs.Combat, "MouseMercyKillToggle", "Mercy Kill (Mouse)", function(v)
+mouseMercyToggle:OnChanged(function(v)
     config.isMercyKillMouseEnabled = v
     if v then
         if config.isMercyKillEnabled then
             config.isMercyKillEnabled = false
-            Tabs.Combat:SetValue("MercyKillToggle", false)
+            mercyToggle:SetValue(false)
         end
         notify("Mercy Kill (Mouse)", "Hold semicolon to fire at mouse", 4)
     end
