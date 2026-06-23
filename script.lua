@@ -1,7 +1,7 @@
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
-
+ 
 -- Teardown: disconnect old connections, close old thread, destroy old GUIs.
 -- Background loops survive — they read shared state and boolean guards
 -- prevent duplicates.
@@ -15,7 +15,7 @@ do
     if getgenv()._hudGui then pcall(function() getgenv()._hudGui:Destroy() end) end
     if getgenv()._mobileGui then pcall(function() getgenv()._mobileGui:Destroy() end) end
 end
-
+ 
 local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
@@ -23,7 +23,7 @@ local Players, UIS, RunService, TweenService, TextService =
     game:GetService("Players"), game:GetService("UserInputService"),
     game:GetService("RunService"), game:GetService("TweenService"), game:GetService("TextService")
 local LP, camera = Players.LocalPlayer, workspace.CurrentCamera
-
+ 
 local DeviceType = game:GetService("UserInputService").TouchEnabled and "Mobile" or "PC"
 if DeviceType == "Mobile" then
     local ClickButton = Instance.new("ScreenGui")
@@ -32,12 +32,12 @@ if DeviceType == "Mobile" then
     local TextButton = Instance.new("TextButton")
     local UICorner = Instance.new("UICorner")
     local UICorner_2 = Instance.new("UICorner")
-
+ 
     ClickButton.Name = "ClickButton"
     ClickButton.Parent = game.CoreGui
     ClickButton.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     getgenv()._mobileGui = ClickButton
-
+ 
     MainFrame.Name = "MainFrame"
     MainFrame.Parent = ClickButton
     MainFrame.AnchorPoint = Vector2.new(1, 0)
@@ -46,13 +46,13 @@ if DeviceType == "Mobile" then
     MainFrame.BorderSizePixel = 0
     MainFrame.Position = UDim2.new(1, -60, 0, 10)
     MainFrame.Size = UDim2.new(0, 45, 0, 45)
-
+ 
     UICorner.CornerRadius = UDim.new(1, 0)
     UICorner.Parent = MainFrame
-
+ 
     UICorner_2.CornerRadius = UDim.new(0, 10)
     UICorner_2.Parent = ImageLabel
-
+ 
     ImageLabel.Parent = MainFrame
     ImageLabel.AnchorPoint = Vector2.new(0.5, 0.5)
     ImageLabel.BackgroundColor3 = Color3.new(0, 0, 0)
@@ -60,7 +60,7 @@ if DeviceType == "Mobile" then
     ImageLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
     ImageLabel.Size = UDim2.new(0, 45, 0, 45)
     ImageLabel.Image = "rbxassetid://"
-
+ 
     TextButton.Parent = MainFrame
     TextButton.BackgroundColor3 = Color3.new(1, 1, 1)
     TextButton.BackgroundTransparency = 1
@@ -72,76 +72,78 @@ if DeviceType == "Mobile" then
     TextButton.Text = "Open"
     TextButton.TextColor3 = Color3.new(220, 125, 255)
     TextButton.TextSize = 20
-
+ 
     TextButton.MouseButton1Click:Connect(function()
         game:GetService("VirtualInputManager"):SendKeyEvent(true, "LeftControl", false, game)
         game:GetService("VirtualInputManager"):SendKeyEvent(false, "LeftControl", false, game)
     end)
 end
-
+ 
 local TANK_DIST, DEFAULT_DIST = 13, 5.7
 local ATK_BASE, ATK_MIN, RESCAN_INT, THRESH_HI, THRESH_LO = 0.18, 0.07, 0.3, 8, 2
+local FORCED_RESCAN_INT = 2  -- safety net; npcStale covers nested-model spawns imperfectly
 local BURST_CAP, BURST_DELAY, ATTR_INT = 150, 0.01, 0.025
 local MERCY_N, MERCY_DLY, BOLTER_DLY, VOTE_DLY, MINE_DLY, TP_DLY = 3, 0.17, 0.08, 1, 0.5, 0.1
-local HUD_FADE, HUD_LINGER, HUD_SLIDE, HUD_OFF = 1.2, 0.4, 0.25, 50
+local HUD_FADE, HUD_LINGER = 1.2, 0.4
 local HUD_W, HUD_WMAX, HUD_Y = 0.34, 0.55, 0.86
-
+ 
 local EXCLUDED = { Landmine=1, Man=1, Turret=1, Stonehenge=1, Sprayer=1, Sentinel=1, Refugee=1,
     PDC=1, MADS=1, Lifeline=1, Hallucinator=1, Governor=1, FAST_point=1, Barrier=1, Administrator=1, Nuke=1 }
 local NOT_TELEPORTABLE = { Platform=1, Hermes=1 }
 for i = 1, 11 do if i ~= 8 then EXCLUDED["dead guy " .. i] = 1 end end
-
+ 
 local config = getgenv().config or {
     killauraEnabled=false, isTeleportEnabled=false, shouldDestroyLandmines=false, isMercyKillEnabled=false,
     isMercyKillMouseEnabled=false, isBolterCoinHitEnabled=false, isAutoVoteEnabled=false,
     isPDCChargesEnabled=false, isSuperWeaponsEnabled=false,
 }
 getgenv().config = config
-
+ 
 -- Shared input state: survives re-execution so surviving mercy/bolter loops
 -- stay functional with the new connections.
 getgenv()._semiDown = false
 getgenv()._qDown = false
-
+ 
 local cachedWeapon, lastFind, killauraOn, killauraThread = nil, 0, false, nil
 local swingN, mercyBusy = 0, false
 local mtModified, mt, origNamecall, savedHook = false, nil, nil, nil
 local currentTarget, locked, bursting = nil, false, false
 local npcCache, npcStale = {}, true
-
+ 
 local function notify(t, c, d) Fluent:Notify({Title=t, Content=c, Duration=d or 5}) end
 local function getHRP() return LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") end
 local function holdingTool() local c = LP.Character return c and c:FindFirstChildOfClass("Tool") ~= nil end
-
+ 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.FilterDescendantsInstances = { camera }
 local function mousePos()
     local m = UIS:GetMouseLocation()
     local r = camera:ViewportPointToRay(m.X, m.Y)
     local hit = workspace:Raycast(camera.CFrame.Position, r.Direction * 1000, rayParams)
     return hit and hit.Position
 end
-
+ 
 local function token() swingN = swingN + 1 return "sweep_" .. swingN .. "_" .. math.random(1000, 9999) end
 local function liveHumanoid(model)
     local h = model:FindFirstChildOfClass("Humanoid")
     if h and h.Health > 0 then return h end
 end
-
+ 
 getgenv()._wsChildAddedConn = workspace.ChildAdded:Connect(function(c)
     if c:IsA("Model") then npcStale = true end
 end)
 getgenv()._wsChildRemovedConn = workspace.ChildRemoved:Connect(function(c)
     if c:IsA("Model") then npcStale = true end
 end)
-
+ 
 local function cacheAdd(out, model, h)
     if not h then return false end
     h.Died:Once(function() npcStale = true end)
     out[#out+1] = {model=model, target=h}
     return true
 end
-
+ 
 local function scanChildren(out, parent, model, pat)
     local found = false
     for _, m in ipairs(parent:GetChildren()) do
@@ -151,11 +153,11 @@ local function scanChildren(out, parent, model, pat)
     end
     return found
 end
-
+ 
 local function scanNPCs(force)
     if not force and not npcStale then return npcCache end
     local out, children = {}, workspace:GetChildren()
-
+ 
     -- Pass 1: Hermes — direct children of workspace. Target LauncherN
     -- children first, fall back to body humanoid when all launchers dead.
     for _, m in ipairs(children) do
@@ -165,20 +167,20 @@ local function scanNPCs(force)
             end
         end
     end
-
+ 
     -- Pass 2: Drones
     for _, m in ipairs(children) do
         if m:IsA("Model") and m.Name == "Drone" then
             cacheAdd(out, m, liveHumanoid(m))
         end
     end
-
+ 
     -- Pass 3: Ground combat. Skip Hermes — already handled in Pass 1.
     for _, m in ipairs(children) do
         if m:IsA("Model") and not Players:GetPlayerFromCharacter(m)
             and m.Name ~= "Model" and m.Name ~= "Folder" and m.Name ~= "Hermes"
             and not EXCLUDED[m.Name] then
-
+ 
             if m.Name == "Platform" then
                 local found = false
                 for _, ch in ipairs(m:GetDescendants()) do
@@ -187,21 +189,21 @@ local function scanNPCs(force)
                     end
                 end
                 if not found then cacheAdd(out, m, liveHumanoid(m)) end
-
+ 
             elseif m.Name == "Tank" then
                 if not scanChildren(out, m, m, "^PropaneTank$") then
                     cacheAdd(out, m, liveHumanoid(m))
                 end
-
+ 
             elseif m.Name == "APU" then
                 cacheAdd(out, m, liveHumanoid(m:FindFirstChild("Pilot")) or liveHumanoid(m))
-
+ 
             else
                 cacheAdd(out, m, liveHumanoid(m))
             end
         end
     end
-
+ 
     npcCache, npcStale = out, false
     if _G.killauraDebug then
         local names = {}
@@ -210,7 +212,7 @@ local function scanNPCs(force)
     end
     return out
 end
-
+ 
 local function bringNPCs()
     local hrp = getHRP() if not hrp then return end
     local fwd, yaw = hrp.CFrame.LookVector, hrp.Orientation.Y
@@ -224,12 +226,12 @@ local function bringNPCs()
         end
     end
 end
-
+ 
 local function destroyLandmines()
     local any; for _, o in ipairs(workspace:GetChildren()) do if o.Name == "Landmine" then o:Destroy(); any = true end end
-    if any then notify("System", "All nearby landmines cleared", 4) end
+    if any then notify("System", "Landmine cleared", 4) end
 end
-
+ 
 local function firePrompt(name)
     for _, o in ipairs(workspace:GetDescendants()) do
         if o:IsA("ProximityPrompt") and string.find(o.ObjectText or "", name, 1, true) then
@@ -238,7 +240,7 @@ local function firePrompt(name)
     end
     notify("Automation Error", "Prompt not found: " .. name, 4)
 end
-
+ 
 -- Dropped weapons stay parented to workspace — verify still in character.
 local function refreshWeapon()
     if cachedWeapon and cachedWeapon.Parent and cachedWeapon.Parent == LP.Character then
@@ -256,7 +258,7 @@ local function refreshWeapon()
     cachedWeapon = findIn(LP.Character) or findIn(LP:FindFirstChild("Backpack"))
     return cachedWeapon
 end
-
+ 
 -- Zero targets: wait RESCAN_INT instead of spinning at ATK_MIN.
 local function atkInterval(n)
     if n == 0 then return RESCAN_INT end
@@ -264,8 +266,8 @@ local function atkInterval(n)
     if n >= THRESH_HI then return ATK_BASE end
     return ATK_MIN + (ATK_BASE - ATK_MIN) * ((n - THRESH_LO) / (THRESH_HI - THRESH_LO))
 end
-
--- HUD
+ 
+-- HUD: simple TextLabel, fades out HUD_LINGER after the last hit.
 local DISPLAY = { Tank="Tank", Drone="Drone", Hermes="Hermes", APU="APU", Platform="Platform", Man="Infantry",
     Turret="Turret", Launcher1="Launcher I", Launcher2="Launcher II", Launcher3="Launcher III",
     Launcher4="Launcher IV", Emplacement1="Emplacement", PropaneTank="Propane Weakpoint" }
@@ -279,58 +281,40 @@ local DEF_COL = Color3.fromRGB(255,255,255)
 local ORDER = { "Launcher1","Launcher2","Launcher3","Launcher4","Hermes","APU","Drone",
     "Emplacement1","Tank","Platform","Man","Turret","PropaneTank" }
 local orderSet = {} for _, t in ipairs(ORDER) do orderSet[t] = true end
-
-local hudGui, hudCont, hudBg, hudStroke, hudLabel, hudHide, hudShown
-local fadeTweens = {}
-
-local function cancelFadeTweens()
-    for _, tw in ipairs(fadeTweens) do pcall(function() tw:Cancel() end) end
-    fadeTweens = {}
-end
-
+ 
+local hudGui, hudCont, hudBg, hudLabel, hudHide, hudShown, hudFadeTween
+ 
 local function initHUD()
     hudGui = Instance.new("ScreenGui")
     hudGui.Name, hudGui.ResetOnSpawn, hudGui.DisplayOrder, hudGui.Parent = "KillauraHUD", false, 100, game:GetService("CoreGui")
     getgenv()._hudGui = hudGui
-
+ 
     hudCont = Instance.new("Frame")
     hudCont.AnchorPoint, hudCont.BackgroundTransparency = Vector2.new(1,0), 1
     hudCont.Size = UDim2.new(HUD_W, 0, 0, 0)
     hudCont.AutomaticSize = Enum.AutomaticSize.Y
-    hudCont.Position, hudCont.Parent = UDim2.new(1,HUD_OFF,HUD_Y,0), hudGui
-
+    hudCont.Position, hudCont.Parent = UDim2.new(1,0,HUD_Y,0), hudGui
+ 
     hudBg = Instance.new("Frame")
-    hudBg.BackgroundColor3, hudBg.BackgroundTransparency, hudBg.BorderSizePixel = Color3.fromRGB(12,12,18), 1, 0
+    hudBg.BackgroundColor3, hudBg.BorderSizePixel = Color3.fromRGB(12,12,18), 0
     hudBg.AutomaticSize, hudBg.Size, hudBg.Parent = Enum.AutomaticSize.Y, UDim2.new(1,0,0,0), hudCont
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = hudBg
-    hudStroke = Instance.new("UIStroke")
-    hudStroke.Color, hudStroke.Thickness, hudStroke.Transparency, hudStroke.Parent = Color3.fromRGB(70,70,95), 1, 1, hudBg
     local p = Instance.new("UIPadding")
     p.PaddingTop, p.PaddingBottom, p.PaddingLeft, p.PaddingRight = UDim.new(0,8), UDim.new(0,8), UDim.new(0,12), UDim.new(0,12)
     p.Parent = hudBg
     hudLabel = Instance.new("TextLabel")
     hudLabel.BackgroundTransparency, hudLabel.Font, hudLabel.TextSize = 1, Enum.Font.GothamMedium, 14
     hudLabel.TextXAlignment, hudLabel.RichText, hudLabel.Text = Enum.TextXAlignment.Right, true, ""
-    hudLabel.TextTransparency, hudLabel.AutomaticSize = 1, Enum.AutomaticSize.Y
+    hudLabel.AutomaticSize = Enum.AutomaticSize.Y
     hudLabel.Size, hudLabel.Parent = UDim2.new(1,0,0,0), hudBg
 end
-
+ 
 local function fmtLine(t, count)
     local col = COLORS[t] or DEF_COL
     return string.format("<font color='rgb(%d,%d,%d)'>%s  x%d</font>",
         math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255), DISPLAY[t] or t, count)
 end
-
-local function tweenProp(inst, info, props)
-    local tweens = {}
-    for k, v in pairs(props) do
-        local tw = TweenService:Create(inst, info, {[k]=v})
-        tw:Play()
-        tweens[#tweens+1] = tw
-    end
-    return tweens
-end
-
+ 
 local function showHUD(counts)
     if not hudGui then initHUD() end
     local total, lines = 0, { "<font size='12' face='GothamBold' color='rgb(160,160,180)'>KILLAURA</font>" }
@@ -343,49 +327,36 @@ local function showHUD(counts)
     end
     lines[#lines+1] = string.format("<font size='13' face='GothamBold'>Total: %d target%s</font>", total, total==1 and "" or "s")
     hudLabel.Text = table.concat(lines, "\n")
-
-    -- Strip rich text before measuring so tags don't inflate width.
+ 
+    -- Size container to text width, clamped to [HUD_W, HUD_WMAX] of viewport.
     local vp = workspace.CurrentCamera.ViewportSize
     local stripped = hudLabel.Text:gsub("<[^>]+>", "")
     local tw = TextService:GetTextSize(stripped, hudLabel.TextSize, hudLabel.Font, Vector2.new(math.huge, math.huge)).X
-    local fraction = math.clamp((tw + 32) / vp.X, HUD_W, HUD_WMAX)
-    hudCont.Size = UDim2.new(fraction, 0, 0, 0)
-
+    hudCont.Size = UDim2.new(math.clamp((tw + 32) / vp.X, HUD_W, HUD_WMAX), 0, 0, 0)
+ 
+    -- Cancel any pending hide / in-progress fade-out, snap visible.
     if hudHide then task.cancel(hudHide); hudHide = nil end
-
-    if hudShown then
-        -- Mid-fade-out: cancel in-progress fade tweens, snap back to visible.
-        cancelFadeTweens()
-        hudCont.Position = UDim2.new(1, 0, HUD_Y, 0)
-        hudBg.BackgroundTransparency = 0.2
-        hudStroke.Transparency = 0.4
-        hudLabel.TextTransparency = 0
-    else
-        -- First appearance: slide in.
-        hudCont.Position = UDim2.new(1, HUD_OFF, HUD_Y, 0)
-        hudBg.BackgroundTransparency = 1
-        hudStroke.Transparency = 1
-        hudLabel.TextTransparency = 1
-        local si = TweenInfo.new(HUD_SLIDE, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-        tweenProp(hudCont, si, {Position=UDim2.new(1,0,HUD_Y,0)})
-        tweenProp(hudBg, si, {BackgroundTransparency=0.2})
-        tweenProp(hudStroke, si, {Transparency=0.4})
-        tweenProp(hudLabel, si, {TextTransparency=0})
+    if hudFadeTween then hudFadeTween:Cancel(); hudFadeTween = nil end
+    if not hudShown then
         hudShown = true
+        hudBg.Visible = true
     end
-
+    hudBg.BackgroundTransparency = 0.2
+ 
+    -- Schedule a single fade-out after the linger period.
     hudHide = task.delay(HUD_LINGER, function()
         if not hudShown or not hudGui or not hudGui.Parent then return end
-        local fi = TweenInfo.new(HUD_FADE, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-        fadeTweens = {}
-        for _, t in ipairs(tweenProp(hudCont, fi, {Position=UDim2.new(1,HUD_OFF,HUD_Y,0)})) do fadeTweens[#fadeTweens+1] = t end
-        for _, t in ipairs(tweenProp(hudBg, fi, {BackgroundTransparency=1})) do fadeTweens[#fadeTweens+1] = t end
-        for _, t in ipairs(tweenProp(hudStroke, fi, {Transparency=1})) do fadeTweens[#fadeTweens+1] = t end
-        for _, t in ipairs(tweenProp(hudLabel, fi, {TextTransparency=1})) do fadeTweens[#fadeTweens+1] = t end
-        hudHide = task.delay(HUD_FADE, function() hudShown = false end)
+        hudFadeTween = TweenService:Create(hudBg, TweenInfo.new(HUD_FADE, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            {BackgroundTransparency = 1})
+        hudFadeTween:Play()
+        hudFadeTween.Completed:Once(function()
+            hudShown = false
+            hudBg.Visible = false
+            hudFadeTween = nil
+        end)
     end)
 end
-
+ 
 local function attackBatch(targets)
     if #targets == 0 or not holdingTool() then return 0 end
     local w = refreshWeapon() if not w then return 0 end
@@ -406,10 +377,10 @@ local function attackBatch(targets)
     if next(counts) then showHUD(counts) end
     return fired
 end
-
+ 
 -- Damage multiplier
 local function resetBurst() currentTarget, locked, bursting = nil, false, false end
-
+ 
 local function cleanupMultiplier()
     if not mtModified then return end
     pcall(function()
@@ -419,7 +390,7 @@ local function cleanupMultiplier()
     end)
     resetBurst(); mtModified = false
 end
-
+ 
 local function setupMultiplier()
     if mtModified then cleanupMultiplier() end
     pcall(function()
@@ -467,7 +438,7 @@ local function setupMultiplier()
         setreadonly(mt, true); mtModified = true
     end)
 end
-
+ 
 -- PDC / Super weapons loop
 task.spawn(function()
     if getgenv()._pdcLoopRunning then return end
@@ -489,12 +460,13 @@ task.spawn(function()
         task.wait(ATTR_INT)
     end
 end)
-
+ 
+-- Mercy Kill: search Character (equipped) first, fall back to Backpack.
 local function findMercy()
-    return LP.Backpack:FindFirstChild("Mercy Kill")
-        or (LP.Character and LP.Character:FindFirstChild("Mercy Kill"))
+    return (LP.Character and LP.Character:FindFirstChild("Mercy Kill"))
+        or LP.Backpack:FindFirstChild("Mercy Kill")
 end
-
+ 
 getgenv()._inputBeganConn = UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.Semicolon then
@@ -517,12 +489,12 @@ getgenv()._inputBeganConn = UIS.InputBegan:Connect(function(input, gp)
         end
     elseif input.KeyCode == Enum.KeyCode.Q then getgenv()._qDown = true end
 end)
-
+ 
 getgenv()._inputEndedConn = UIS.InputEnded:Connect(function(input)
     if input.KeyCode == Enum.KeyCode.Semicolon then getgenv()._semiDown = false
     elseif input.KeyCode == Enum.KeyCode.Q then getgenv()._qDown = false end
 end)
-
+ 
 task.spawn(function()
     if getgenv()._mercyMouseLoopRunning then return end
     getgenv()._mercyMouseLoopRunning = true
@@ -534,7 +506,7 @@ task.spawn(function()
         task.wait(0.1)
     end
 end)
-
+ 
 task.spawn(function()
     if getgenv()._bolterLoopRunning then return end
     getgenv()._bolterLoopRunning = true
@@ -548,7 +520,7 @@ task.spawn(function()
         task.wait(BOLTER_DLY)
     end
 end)
-
+ 
 task.spawn(function()
     if getgenv()._autoVoteLoopRunning then return end
     getgenv()._autoVoteLoopRunning = true
@@ -565,7 +537,7 @@ task.spawn(function()
         task.wait(VOTE_DLY)
     end
 end)
-
+ 
 -- Main loop
 local tpTh, mineTh = 0, 0
 getgenv()._heartbeatConn = RunService.Heartbeat:Connect(function(dt)
@@ -578,7 +550,7 @@ getgenv()._heartbeatConn = RunService.Heartbeat:Connect(function(dt)
         if mineTh >= MINE_DLY then mineTh = 0; destroyLandmines() end
     end
 end)
-
+ 
 -- UI
 local Window = Fluent:CreateWindow({
     Title = "Dummies Versus Noobs | qcrylic - Premium", SubTitle = "@qcrylic", TabWidth = 160,
@@ -596,11 +568,11 @@ SaveManager:SetLibrary(Fluent); InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
 InterfaceManager:SetFolder("FluentScriptHub"); SaveManager:SetFolder("FluentScriptHub/specific-game")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings); SaveManager:BuildConfigSection(Tabs.Settings)
-
+ 
 local function toggle(tab, name, title, cb)
     tab:AddToggle(name, {Title=title, Default=false}):OnChanged(cb)
 end
-
+ 
 toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
     killauraOn = v
     config.killauraEnabled = v
@@ -608,9 +580,10 @@ toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
         if killauraThread then pcall(coroutine.close, killauraThread); killauraThread = nil end
         killauraThread = coroutine.create(function()
             while killauraOn do
-                if tick() - lastFind > RESCAN_INT then scanNPCs(true); lastFind = tick() end
-                local t = npcCache
-                local fired = attackBatch(t) or 0
+                -- Safety-net rescan covers nested-model spawns (Hermes launchers,
+                -- Tank propane, Platform emplacements) that workspace ChildAdded misses.
+                if tick() - lastFind > FORCED_RESCAN_INT then scanNPCs(true); lastFind = tick() end
+                local fired = attackBatch(npcCache) or 0
                 task.wait(atkInterval(fired))
             end
         end)
@@ -622,15 +595,15 @@ toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
         npcCache, lastFind, cachedWeapon = {}, 0, nil
     end
 end)
-
+ 
 toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v) config.isTeleportEnabled = v end)
-
+ 
 toggle(Tabs.Main, "AutoVoteToggle", "Auto Vote Waves", function(v) config.isAutoVoteEnabled = v end)
-
+ 
 -- Store toggle references for mutual exclusion (Tab doesn't have SetValue).
 local mercyToggle = Tabs.Combat:AddToggle("MercyKillToggle", {Title="Mercy Kill", Default=false})
 local mouseMercyToggle = Tabs.Combat:AddToggle("MouseMercyKillToggle", {Title="Mercy Kill (Mouse)", Default=false})
-
+ 
 mercyToggle:OnChanged(function(v)
     config.isMercyKillEnabled = v
     if v and config.isMercyKillMouseEnabled then
@@ -638,7 +611,7 @@ mercyToggle:OnChanged(function(v)
         mouseMercyToggle:SetValue(false)
     end
 end)
-
+ 
 mouseMercyToggle:OnChanged(function(v)
     config.isMercyKillMouseEnabled = v
     if v then
@@ -649,20 +622,20 @@ mouseMercyToggle:OnChanged(function(v)
         notify("Mercy Kill (Mouse)", "Hold semicolon to fire at mouse", 4)
     end
 end)
-
+ 
 toggle(Tabs.Combat, "DamageMultiplierToggle", "Damage Multiplier",
     function(v) _G.multiplier = v; if v then setupMultiplier() else cleanupMultiplier() end end)
-
+ 
 toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v) config.isPDCChargesEnabled = v end)
-
+ 
 toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v) config.isSuperWeaponsEnabled = v end)
-
+ 
 Tabs.Targeting:AddSection("NPC Management")
 Tabs.Targeting:AddButton({Title="Refresh NPC Cache", Description="Force refresh the NPC detection cache", Callback=function()
     scanNPCs(true)
     notify("System", "NPC cache refreshed", 3)
 end})
-
+ 
 Tabs.Targeting:AddButton({Title="Spawn Noob Units", Description="Spawns all standard noob units to workspace", Callback=function()
     local ex = {Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1, Achilles=1, Confidant=1, London=1, Tank=1, Platform=1, Man=1, MangleNether345=1, MegaJoe=1, Administrator=1}
     local count = 0
@@ -674,17 +647,17 @@ Tabs.Targeting:AddButton({Title="Spawn Noob Units", Description="Spawns all stan
     end
     notify("Spawn Noob Units", "Spawned " .. count .. " unit" .. (count==1 and "" or "s"), 4)
 end})
-
+ 
 toggle(Tabs.Utility, "LandmineToggle", "Destroy Landmines", function(v) config.shouldDestroyLandmines = v end)
-
+ 
 toggle(Tabs.Utility, "BolterCoinToggle", "Bolter Coin Hit (Hold Q)", function(v) config.isBolterCoinHitEnabled = v end)
-
+ 
 Tabs.Utility:AddSection("Teleportation")
 Tabs.Utility:AddButton({Title="Teleport to Lobby", Description="Teleports to lobby ingame", Callback=function()
     local hrp = getHRP()
     if hrp then hrp.CFrame = CFrame.new(-3, -101.5, -12.5); notify("System", "Teleported to lobby", 4) end
 end})
-
+ 
 Tabs.Utility:AddButton({Title="Teleport to Map", Description="Teleports player to map", Callback=function()
     pcall(function()
         local hrp = LP.Character and LP.Character:WaitForChild("HumanoidRootPart")
@@ -692,7 +665,7 @@ Tabs.Utility:AddButton({Title="Teleport to Map", Description="Teleports player t
         if hrp and sp then hrp.CFrame = sp.CFrame + Vector3.new(0, 3, 0); notify("System", "Teleported to map", 4) end
     end)
 end})
-
+ 
 Tabs.Utility:AddSection("Developer Tools")
 Tabs.Utility:AddButton({Title="Dev Tools", Description="Developer tools and utilities", Callback=function()
     Window:Dialog({Title="Developer Tools", Buttons={
@@ -701,12 +674,12 @@ Tabs.Utility:AddButton({Title="Dev Tools", Description="Developer tools and util
         {Title="Close", Callback=function() end},
     }})
 end})
-
+ 
 Tabs.Utility:AddSection("Proximity Prompts")
 for _, a in ipairs({{"Modifier","Fires the Modifier prompt"},{"Armoury","Fires the Armoury prompt"},{"Ammo Fabricator","Fires the Ammo Fabricator prompt"}}) do
     Tabs.Utility:AddButton({Title=a[1], Description=a[2], Callback=function() firePrompt(a[1]) end})
 end
-
+ 
 notify("Fluent", "Script loaded!", 8)
 Window:SelectTab(1)
 SaveManager:LoadAutoloadConfig()
