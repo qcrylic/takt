@@ -24,13 +24,23 @@ bl="\95\98\111\108\116\101\114\76\111\111\112\82\117\110\110\105\110\103",
 av="\95\97\117\116\111\86\111\116\101\76\111\111\112\82\117\110\110\105\110\103",
 cfg="\99\111\110\102\105\103",
 }
+local S={
+G="\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47",
+SM="\83\97\118\101\77\97\110\97\103\101\114",
+IM="\73\110\116\101\114\102\97\99\101\77\97\110\97\103\101\114",
+SH="\70\108\117\101\110\116\83\99\114\105\112\116\72\117\98",
+sfl="\115\107\101\112\116\105\99\97\52\47\70\108\117\101\110\116\118\118\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\102\108\117\101\110\116\46\108\117\97",
+dsf="\100\97\119\105\100\45\115\99\114\105\112\116\115\47\70\108\117\101\110\116\47\109\97\115\116\101\114\47\65\100\100\111\110\115\47",
+DX="\115\107\101\112\116\105\99\97\52\47\97\97\97\97\97\97\97\97\97\97\97\97\97\97\97\47\109\97\105\110\47\100\97\114\107\100\101\120",
+SP="\55\56\110\47\83\105\109\112\108\101\83\112\121\47\109\97\105\110\47\83\105\109\112\108\101\83\112\121\66\101\116\97\46\108\117\97",
+}
 if GE[K.thread]then pcall(task.cancel,GE[K.thread])end
 for _,k in ipairs({K.hbc,K.ibc,K.iec,K.ac,K.rc})do local c=GE[k]if c then pcall(c.Disconnect,c)end end
 for _,k in ipairs({K.hg,K.mg})do local g=GE[k]if g then pcall(g.Destroy,g)end end
 if GE[K.mtMod]then pcall(function()local m=getrawmetatable(game)setreadonly(m,false)if m.__namecall==GE[K.hook]then m.__namecall=GE[K.orig]end setreadonly(m,true)end)GE[K.mtMod]=false end
-local Fluent=loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua"))()
-local SaveManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
-local InterfaceManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+local Fluent=loadstring(game:HttpGet(S.G..S.sfl))()
+local SaveManager=loadstring(game:HttpGet(S.G..S.dsf..S.SM..".lua"))()
+local InterfaceManager=loadstring(game:HttpGet(S.G..S.dsf..S.IM..".lua"))()
 local P,U,RU,T,X=game.Players,game.UserInputService,game.RunService,game.TweenService,game.TextService
 local LP,cam=P.LocalPlayer,workspace.CurrentCamera
 local RS,E=game.ReplicatedStorage,Enum
@@ -334,7 +344,7 @@ Utility=Win:AddTab({Title="Utility",Icon="plus-circle"}),Settings=Win:AddTab({Ti
 }
 SaveManager:SetLibrary(Fluent)InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
-InterfaceManager:SetFolder("FluentScriptHub")SaveManager:SetFolder("FluentScriptHub/specific-game")
+InterfaceManager:SetFolder(S.SH)SaveManager:SetFolder(S.SH.."/specific-game")
 InterfaceManager:BuildInterfaceSection(Tab.Settings)SaveManager:BuildConfigSection(Tab.Settings)
 local function addT(tab,key,title,cb)tab:AddToggle(key,{Title=title,Default=false}):OnChanged(cb)end
 addT(Tab.Main,"KillauraToggle","Killaura",function(v)
@@ -394,8 +404,8 @@ end})
 Tab.Utility:AddSection("Developer Tools")
 Tab.Utility:AddButton({Title="Dev Tools",Description="Developer tools and utilities",Callback=function()
 Win:Dialog({Title="Developer Tools",Buttons={
-{Title="Dark Dex",Callback=function()loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/aaaaaaaaaaaaaa/main/darkdex"))()end},
-{Title="Remote Spy",Callback=function()loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/78n/SimpleSpy/main/SimpleSpyBeta.lua"))()end},
+{Title="Dark Dex",Callback=function()loadstring(game:HttpGet(S.G..S.DX))()end},
+{Title="Remote Spy",Callback=function()loadstring(game:HttpGetAsync(S.G..S.SP))()end},
 {Title="Close",Callback=function()end},
 }})
 end})
