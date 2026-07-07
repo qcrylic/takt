@@ -39,6 +39,7 @@ for _,k in ipairs({K.hbc,K.ibc,K.iec,K.ac,K.rc})do local c=GE[k]if c then pcall(
 for _,k in ipairs({K.hg,K.mg})do local g=GE[k]if g then pcall(g.Destroy,g)end end
 if GE[K.mtMod]then pcall(function()local m=getrawmetatable(game)setreadonly(m,false)if m.__namecall==GE[K.hook]then m.__namecall=GE[K.orig]end setreadonly(m,true)end)GE[K.mtMod]=false end
 local Fluent=loadstring(game:HttpGet(S.G..S.sfl))()
+if not Fluent then return end
 local SaveManager=loadstring(game:HttpGet(S.G..S.dsf..S.SM..".lua"))()
 local InterfaceManager=loadstring(game:HttpGet(S.G..S.dsf..S.IM..".lua"))()
 local P,U,RU,T,X=game.Players,game.UserInputService,game.RunService,game.TweenService,game.TextService
@@ -47,7 +48,9 @@ local RS,E=game.ReplicatedStorage,Enum
 local function I(c,p,pr)local o=Instance.new(c)if pr then for k,v in next,pr do o[k]=v end end o.Parent=p return o end
 local function R(r,g,b)return Color3.fromRGB(r,g,b)end
 local N3,U2,U1,V2=Color3.new,UDim2.new,UDim.new,Vector2.new
-local tw=task.wait
+local tw,F=task.wait,math.floor
+local npcOut={}
+local cachedHTML,cachedW="",""
 if U.TouchEnabled then
 local VIM=game.VirtualInputManager
 local cl=I("ScreenGui",game.CoreGui,{Name="ClickButton",ZIndexBehavior=E.ZIndexBehavior.Sibling})
@@ -100,7 +103,8 @@ end return fd
 end
 local function scanNPCs(force)
 if not force and not npcStale then return npcCache end
-local out,chs={},workspace:GetChildren()
+table.clear(npcOut)
+local out,chs=npcOut,workspace:GetChildren()
 for _,m in ipairs(chs)do
 if m:IsA("Model")and m.Name=="Hermes"then
 if not scanChildren(out,m,m,"^Launcher%d+$")then cacheAdd(out,m,liveHum(m))end
@@ -190,13 +194,18 @@ end
 local function showHUD(counts)
 if not hudGui then initHUD()end
 local total,lines=0,{"<font size='12' face='GothamBold' color='rgb(160,160,180)'>KILLAURA</font>"}
-for _,t in ipairs(ORDER)do local c=counts[t]if c and c>0 then total=total+c local cl=COLORS[t]or DCOL lines[#lines+1]=string.format("<font color='rgb(%d,%d,%d)'>%s  x%d</font>",cl.R*255,cl.G*255,cl.B*255,DISPLAY[t]or t,c)end end
-for t,c in pairs(counts)do if not ORDSET[t]and c>0 then total=total+c local cl=COLORS[t]or DCOL lines[#lines+1]=string.format("<font color='rgb(%d,%d,%d)'>%s  x%d</font>",cl.R*255,cl.G*255,cl.B*255,DISPLAY[t]or t,c)end end
+for _,t in ipairs(ORDER)do local c=counts[t]if c and c>0 then total=total+c local cl=COLORS[t]or DCOL lines[#lines+1]="<font color='rgb("..F(cl.R*255)..","..F(cl.G*255)..","..F(cl.B*255)..")'>"..(DISPLAY[t]or t).."  x"..c.."</font>" end end
+for t,c in pairs(counts)do if not ORDSET[t]and c>0 then total=total+c local cl=COLORS[t]or DCOL lines[#lines+1]="<font color='rgb("..F(cl.R*255)..","..F(cl.G*255)..","..F(cl.B*255)..")'>"..(DISPLAY[t]or t).."  x"..c.."</font>" end end
 lines[#lines+1]=string.format("<font size='13' face='GothamBold'>Total: %d target%s</font>",total,total==1 and""or"s")
-hudLabel.Text=table.concat(lines,"\n")
-local vp=cam.ViewportSize local stripped=hudLabel.Text:gsub("<[^>]+>","")
-local tw_=X:GetTextSize(stripped,hudLabel.TextSize,hudLabel.Font,V2(math.huge,math.huge)).X
-hudCont.Size=U2(math.clamp((tw_+32)/vp.X,HW,HX),0,0,0)
+local txt=table.concat(lines,"\n")
+if txt~=cachedHTML then
+cachedHTML=txt
+hudLabel.Text=txt
+local stripped=txt:gsub("<[^>]+>","")
+cachedW=X:GetTextSize(stripped,hudLabel.TextSize,hudLabel.Font,V2(math.huge,math.huge)).X
+end
+local vp=cam.ViewportSize
+hudCont.Size=U2(math.clamp((cachedW+32)/vp.X,HW,HX),0,0,0)
 if hudHide then task.cancel(hudHide)hudHide=nil end
 if hudTw then hudTw:Cancel()hudTw=nil end
 if not hudShown then hudShown=true hudBg.Visible=true end
@@ -353,11 +362,11 @@ if kaThread then task.cancel(kaThread)kaThread=nil end
 if kaOn then
 kaThread=task.spawn(function()
 while kaOn do
-if tick()-lastFind>FR then scanNPCs(true)lastFind=tick()end
+if os.clock()-lastFind>FR then scanNPCs(true)lastFind=os.clock()end
 tw(atkInterval(attackBatch(npcCache)or 0))
 end
 end)GE[K.thread]=kaThread
-else GE[K.thread]=nil npcCache,lastFind,cachedWpn={},0,nil end
+else GE[K.thread]=nil npcStale,lastFind,cachedWpn=true,0,nil end
 end)
 addT(Tab.Main,"BringNPCsToggle","Bring NPCs",function(v)cfg.isTeleportEnabled=v end)
 addT(Tab.Main,"AutoVoteToggle","Auto Vote Waves",function(v)cfg.isAutoVoteEnabled=v end)
@@ -385,7 +394,7 @@ scanNPCs(true)notify("System","NPC cache refreshed",3)
 end})
 Tab.Targeting:AddButton({Title="Spawn Noob Units",Description="Spawns all standard noob units to workspace",Callback=function()
 local ex={Dreadnought=1,["Achilles(ht)"]=1,Sparchilles=1,APU=1,APU_Operator=1,Hermes=1,Achilles=1,Confidant=1,London=1,Tank=1,Platform=1,Man=1,MangleNether345=1,MegaJoe=1,Administrator=1}
-local c=0 for _,v in ipairs(RS.Units.Noobs:GetChildren())do if not ex[v.Name]then v.Parent=workspace c=c+1 end end
+local c=0 pcall(function()for _,v in ipairs(RS.Units.Noobs:GetChildren())do if not ex[v.Name]then v.Parent=workspace c=c+1 end end end)
 notify("Spawn Noob Units","Spawned "..c.." unit"..(c==1 and""or"s"),4)
 end})
 addT(Tab.Utility,"LandmineToggle","Destroy Landmines",function(v)cfg.shouldDestroyLandmines=v end)
