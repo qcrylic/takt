@@ -1,425 +1,1067 @@
-if not game:IsLoaded()then game.Loaded:Wait()end
-local GE=getgenv()
-local K={
-mtMod="\95\109\116\77\111\100\105\102\105\101\100",
-orig="\95\111\114\105\103\78\97\109\101\99\97\108\108",
-hook="\95\115\97\118\101\100\72\111\111\107",
-tgt="\95\99\117\114\114\101\110\116\84\97\114\103\101\116",
-lk="\95\108\111\99\107\101\100",
-bs="\95\98\117\114\115\116\105\110\103",
-thread="\95\107\105\108\108\97\117\114\97\84\104\114\101\97\100",
-hbc="\95\104\101\97\114\116\98\101\97\116\67\111\110\110",
-ibc="\95\105\110\112\117\116\66\101\103\97\110\67\111\110\110",
-iec="\95\105\110\112\117\116\69\110\100\101\100\67\111\110\110",
-ac="\95\119\115\67\104\105\108\100\65\100\100\101\100\67\111\110\110",
-rc="\95\119\115\67\104\105\108\100\82\101\109\111\118\101\100\67\111\110\110",
-hg="\95\104\117\100\71\117\105",
-mg="\95\109\111\98\105\108\101\71\117\105",
-sd="\95\115\101\109\105\68\111\119\110",
-qd="\95\113\68\111\119\110",
-pl="\95\112\100\99\76\111\111\112\82\117\110\110\105\110\103",
-ml="\95\109\101\114\99\121\77\111\117\115\101\76\111\111\112\82\117\110\110\105\110\103",
-kl="\95\109\101\114\99\121\75\101\121\98\111\97\114\100\76\111\111\112\82\117\110\110\105\110\103",
-bl="\95\98\111\108\116\101\114\76\111\111\112\82\117\110\110\105\110\103",
-av="\95\97\117\116\111\86\111\116\101\76\111\111\112\82\117\110\110\105\110\103",
-cfg="\99\111\110\102\105\103",
+--[[
+    Dummies vs Noobs Premium Script – Final Optimized
+    qcrylic – All-in-one combat, utility, and automation for Dummies vs Noobs
+
+    This version includes all original 12 improvements plus:
+     1. Reused tables in the damage multiplier hook to eliminate per-hit allocations
+     2. Immediate HUD position update when cycling in settings
+     3. Immediate hold duration feedback (re-schedules fade on slider change)
+     4. Periodic cleanup of notification throttle timestamps
+     5. Responsive auto-vote loop (detects new vote within 1 sec)
+     6. Prompt cache invalidation on descendant removal
+     7. NPC count shown in refresh button notification
+     8. Persistent killaura status indicator (togglable in HUD settings)
+
+    Version: 2.1
+    Last modified: 2026-07-21
+]]
+
+-- Wait for the game to fully load
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- ============================================================================
+-- Teardown: disconnect old connections, close old threads, destroy old GUIs.
+-- ============================================================================
+do
+    if getgenv()._killauraAttackThread then pcall(coroutine.close, getgenv()._killauraAttackThread) end
+    if getgenv()._killauraScanThread then pcall(coroutine.close, getgenv()._killauraScanThread) end
+    if getgenv()._heartbeatConn then pcall(function() getgenv()._heartbeatConn:Disconnect() end) end
+    if getgenv()._inputBeganConn then pcall(function() getgenv()._inputBeganConn:Disconnect() end) end
+    if getgenv()._inputEndedConn then pcall(function() getgenv()._inputEndedConn:Disconnect() end) end
+    if getgenv()._wsChildAddedConn then pcall(function() getgenv()._wsChildAddedConn:Disconnect() end) end
+    if getgenv()._wsChildRemovedConn then pcall(function() getgenv()._wsChildRemovedConn:Disconnect() end) end
+    if getgenv()._hudGui then pcall(function() getgenv()._hudGui:Destroy() end) end
+    if getgenv()._mobileGui then pcall(function() getgenv()._mobileGui:Destroy() end) end
+    if getgenv()._statusGui then pcall(function() getgenv()._statusGui:Destroy() end) end
+end
+
+-- Load external libraries
+local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua"))()
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+-- Services
+local PlayersService, UserInputService, RunService, TweenService, TextService =
+    game:GetService("Players"), game:GetService("UserInputService"),
+    game:GetService("RunService"), game:GetService("TweenService"), game:GetService("TextService")
+local LocalPlayer, Camera = PlayersService.LocalPlayer, workspace.CurrentCamera
+
+-- Mobile UI open button
+local DeviceType = UserInputService.TouchEnabled and "Mobile" or "PC"
+if DeviceType == "Mobile" then
+    local ClickButton = Instance.new("ScreenGui")
+    local MainFrame = Instance.new("Frame")
+    local ImageLabel = Instance.new("ImageLabel")
+    local TextButton = Instance.new("TextButton")
+    local UICorner = Instance.new("UICorner")
+    local UICorner_2 = Instance.new("UICorner")
+
+    ClickButton.Name = "ClickButton"
+    ClickButton.Parent = game.CoreGui
+    ClickButton.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    getgenv()._mobileGui = ClickButton
+
+    MainFrame.Name = "MainFrame"
+    MainFrame.Parent = ClickButton
+    MainFrame.AnchorPoint = Vector2.new(1, 0)
+    MainFrame.BackgroundTransparency = 0.8
+    MainFrame.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Position = UDim2.new(1, -60, 0, 10)
+    MainFrame.Size = UDim2.new(0, 45, 0, 45)
+
+    UICorner.CornerRadius = UDim.new(1, 0)
+    UICorner.Parent = MainFrame
+
+    UICorner_2.CornerRadius = UDim.new(0, 10)
+    UICorner_2.Parent = ImageLabel
+
+    ImageLabel.Parent = MainFrame
+    ImageLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+    ImageLabel.BackgroundColor3 = Color3.new(0, 0, 0)
+    ImageLabel.BorderSizePixel = 0
+    ImageLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
+    ImageLabel.Size = UDim2.new(0, 45, 0, 45)
+    ImageLabel.Image = "rbxassetid://"
+
+    TextButton.Parent = MainFrame
+    TextButton.BackgroundColor3 = Color3.new(1, 1, 1)
+    TextButton.BackgroundTransparency = 1
+    TextButton.BorderSizePixel = 0
+    TextButton.Position = UDim2.new(0, 0, 0, 0)
+    TextButton.Size = UDim2.new(0, 45, 0, 45)
+    TextButton.AutoButtonColor = false
+    TextButton.Font = Enum.Font.SourceSans
+    TextButton.Text = "Open"
+    TextButton.TextColor3 = Color3.new(220, 125, 255)
+    TextButton.TextSize = 20
+
+    TextButton.MouseButton1Click:Connect(function()
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, "LeftControl", false, game)
+        game:GetService("VirtualInputManager"):SendKeyEvent(false, "LeftControl", false, game)
+    end)
+end
+
+-- ============================================================================
+-- Centralized configuration
+-- ============================================================================
+local CONFIG = {
+    tuning = {
+        attackBaseDelay = 0.18,
+        attackMinDelay = 0.07,
+        rescanInterval = 0.3,
+        highTargetThreshold = 8,
+        lowTargetThreshold = 2,
+        forcedRescanInterval = 2,
+        burstCap = 150,
+        burstDelay = 0.01,
+        attributeRefresh = 0.025,
+        mercySwings = 3,
+        mercyDelay = 0.17,
+        bolterDelay = 0.08,
+        voteDelay = 1,
+        idleVoteDelay = 10,     -- seconds to wait before checking for vote again
+        landmineDelay = 0.5,
+        teleportDelay = 0.1,
+        tankDistance = 13,
+        defaultDistance = 5.7,
+    },
+    hud = {
+        enabled = true,
+        fadeDuration = 1.2,
+        holdDuration = 0.4,
+        minWidth = 0.34,
+        maxWidth = 0.55,
+        yPosition = 0.86,
+        position = "top-right",
+        showStatusIndicator = false,  -- Step 8: persistent "KA" badge
+    },
 }
-local S={
-G="\104\116\116\112\115\58\47\47\114\97\119\46\103\105\116\104\117\98\117\115\101\114\99\111\110\116\101\110\116\46\99\111\109\47",
-SM="\83\97\118\101\77\97\110\97\103\101\114",
-IM="\73\110\116\101\114\102\97\99\101\77\97\110\97\103\101\114",
-SH="\70\108\117\101\110\116\83\99\114\105\112\116\72\117\98",
-sfl="\115\107\101\112\116\105\99\97\52\47\70\108\117\101\110\116\118\118\47\114\101\102\115\47\104\101\97\100\115\47\109\97\105\110\47\102\108\117\101\110\116\46\108\117\97",
-dsf="\100\97\119\105\100\45\115\99\114\105\112\116\115\47\70\108\117\101\110\116\47\109\97\115\116\101\114\47\65\100\100\111\110\115\47",
-DX="\115\107\101\112\116\105\99\97\52\47\97\97\97\97\97\97\97\97\97\97\97\97\97\97\97\47\109\97\105\110\47\100\97\114\107\100\101\120",
-SP="\55\56\110\47\83\105\109\112\108\101\83\112\121\47\109\97\105\110\47\83\105\109\112\108\101\83\112\121\66\101\116\97\46\108\117\97",
+
+-- Feature toggles (persisted via getgenv().config)
+local savedConfig = getgenv().config or {}
+local config = {
+    killauraEnabled = savedConfig.killauraEnabled or false,
+    isTeleportEnabled = savedConfig.isTeleportEnabled or false,
+    shouldDestroyLandmines = savedConfig.shouldDestroyLandmines or false,
+    isMercyKillEnabled = savedConfig.isMercyKillEnabled or false,
+    isMercyKillMouseEnabled = savedConfig.isMercyKillMouseEnabled or false,
+    isBolterCoinHitEnabled = savedConfig.isBolterCoinHitEnabled or false,
+    isAutoVoteEnabled = savedConfig.isAutoVoteEnabled or false,
+    isPDCChargesEnabled = savedConfig.isPDCChargesEnabled or false,
+    isSuperWeaponsEnabled = savedConfig.isSuperWeaponsEnabled or false,
+    hud = savedConfig.hud or CONFIG.hud,
 }
-if GE[K.thread]then pcall(task.cancel,GE[K.thread])end
-for _,k in ipairs({K.hbc,K.ibc,K.iec,K.ac,K.rc})do local c=GE[k]if c then pcall(c.Disconnect,c)end end
-for _,k in ipairs({K.hg,K.mg})do local g=GE[k]if g then pcall(g.Destroy,g)end end
-if GE[K.mtMod]then pcall(function()local m=getrawmetatable(game)setreadonly(m,false)if m.__namecall==GE[K.hook]then m.__namecall=GE[K.orig]end setreadonly(m,true)end)GE[K.mtMod]=false end
-local Fluent=loadstring(game:HttpGet(S.G..S.sfl))()
-if not Fluent then return end
-local SaveManager=loadstring(game:HttpGet(S.G..S.dsf..S.SM..".lua"))()
-local InterfaceManager=loadstring(game:HttpGet(S.G..S.dsf..S.IM..".lua"))()
-local P,U,RU,T,X=game.Players,game.UserInputService,game.RunService,game.TweenService,game.TextService
-local LP,cam=P.LocalPlayer,workspace.CurrentCamera
-local RS,E=game.ReplicatedStorage,Enum
-local function I(c,p,pr)local o=Instance.new(c)if pr then for k,v in next,pr do o[k]=v end end o.Parent=p return o end
-local function R(r,g,b)return Color3.fromRGB(r,g,b)end
-local N3,U2,U1,V2=Color3.new,UDim2.new,UDim.new,Vector2.new
-local tw,F=task.wait,math.floor
-local npcOut={}
-local cachedHTML,cachedW="",""
-if U.TouchEnabled then
-local VIM=game.VirtualInputManager
-local cl=I("ScreenGui",game.CoreGui,{Name="ClickButton",ZIndexBehavior=E.ZIndexBehavior.Sibling})
-GE[K.mg]=cl
-local mf=I("Frame",cl,{Name="MainFrame",AnchorPoint=V2(1,0),BackgroundTransparency=.8,BackgroundColor3=R(38,38,38),BorderSizePixel=0,Position=U2(1,-60,0,10),Size=U2(0,45,0,45)})
-I("UICorner",mf,{CornerRadius=U1(1,0)})
-local il=I("ImageLabel",mf,{AnchorPoint=V2(.5,.5),BackgroundColor3=N3(0,0,0),BorderSizePixel=0,Position=U2(.5,0,.5,0),Size=U2(0,45,0,45),Image="rbxassetid://"})
-I("UICorner",il,{CornerRadius=U1(0,10)})
-I("TextButton",mf,{BackgroundColor3=N3(1,1,1),BackgroundTransparency=1,BorderSizePixel=0,Size=U2(0,45,0,45),AutoButtonColor=false,Font=E.Font.SourceSans,Text="Open",TextColor3=N3(220,125,255),TextSize=20}).MouseButton1Click:Connect(function()
-VIM:SendKeyEvent(true,"LeftControl",false,game)VIM:SendKeyEvent(false,"LeftControl",false,game)
-end)
+getgenv().config = config
+
+-- Exclusion lists
+local EXCLUDED = { Landmine=1, Man=1, Turret=1, Stonehenge=1, Sprayer=1, Sentinel=1, Refugee=1,
+    PDC=1, MADS=1, Lifeline=1, Hallucinator=1, Governor=1, FAST_point=1, Barrier=1, Administrator=1, Nuke=1 }
+local NOT_TELEPORTABLE = { Platform=1, Hermes=1 }
+for i = 1, 11 do if i ~= 8 then EXCLUDED["dead guy " .. i] = 1 end end
+
+-- Shared input state
+getgenv()._semiDown = false
+getgenv()._qDown = false
+
+-- ============================================================================
+-- Runtime state
+-- ============================================================================
+local cachedWeapon, lastScanTime, killauraActive, killauraAttackThread, killauraScanThread = nil, 0, false, nil, nil
+local swingCounter, mercyBusy = 0, false
+local metatableModified, gameMetatable, originalNamecall, savedHook = false, nil, nil, nil
+local currentTargetHumanoid, targetLocked, isBursting = nil, false, false
+
+-- ============================================================================
+-- Double‑buffered NPC cache
+-- ============================================================================
+local npcBufA, npcBufB = {}, {}
+local npcCache = npcBufA
+local useBufA = true
+local npcStale = true
+
+-- ============================================================================
+-- Notification throttle helper (Step 4: periodic cleanup)
+-- ============================================================================
+local notificationThrottleTimestamps = {}
+local function notifyThrottled(message, interval)
+    local now = tick()
+    local last = notificationThrottleTimestamps[message]
+    if not last or now - last >= (interval or 10) then
+        notificationThrottleTimestamps[message] = now
+        Fluent:Notify({Title = "System", Content = message, Duration = 5})
+    end
 end
-local TD,DD=13,5.7
-local AB,AM,RI,TH,TL,FR=.18,.07,.3,8,2,2
-local BC,BD,AI=150,.01,.025
-local MN,MD,BL,VD,MI,TP_d=3,.17,.08,1,.5,.1
-local HF,HL,HW,HX,HY=1.2,.4,.34,.55,.86
-local EX={Landmine=1,Man=1,Turret=1,Stonehenge=1,Sprayer=1,Sentinel=1,Refugee=1,PDC=1,MADS=1,Lifeline=1,Hallucinator=1,Governor=1,FAST_point=1,Barrier=1,Administrator=1,Nuke=1}
-for i=1,11 do if i~=8 then EX["dead guy "..i]=1 end end
-local NTP={Platform=1,Hermes=1}
-local cfg=GE[K.cfg]or{killauraEnabled=false,isTeleportEnabled=false,shouldDestroyLandmines=false,isMercyKillEnabled=false,isMercyKillMouseEnabled=false,isBolterCoinHitEnabled=false,isAutoVoteEnabled=false,isPDCChargesEnabled=false,isSuperWeaponsEnabled=false}
-GE[K.cfg]=cfg
-GE[K.sd],GE[K.qd]=false,false
-GE[K.mtMod],GE[K.orig],GE[K.hook]=false,nil,nil
-GE[K.tgt],GE[K.lk],GE[K.bs]=nil,false,false
-local cachedWpn,lastFind,kaOn,kaThread,swingN=nil,0,false,nil,0
-local npcStale,npcCache=true,{}
-local rayP=RaycastParams.new()
-rayP.FilterType=E.RaycastFilterType.Exclude
-rayP.FilterDescendantsInstances={cam}
-local function notify(t,c,d)Fluent:Notify({Title=t,Content=c,Duration=d or 5})end
-local function getHRP()return LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")end
-local function holdingTool()local c=LP.Character return c and c:FindFirstChildOfClass("Tool")~=nil end
-local function mousePos()
-local m=U:GetMouseLocation()local r=cam:ViewportPointToRay(m.X,m.Y)
-local h=workspace:Raycast(cam.CFrame.Position,r.Direction*1000,rayP)return h and h.Position
-end
-local function token()swingN=swingN+1 return"sweep_"..swingN.."_"..math.random(1000,9999)end
-local function liveHum(m)local h=m:FindFirstChildOfClass("Humanoid")if h and h.Health>0 then return h end end
-GE[K.ac]=workspace.ChildAdded:Connect(function(c)if c:IsA("Model")then npcStale=true end end)
-GE[K.rc]=workspace.ChildRemoved:Connect(function(c)if c:IsA("Model")then npcStale=true end end)
-local function cacheAdd(out,m,h)
-if not h then return false end h.Died:Once(function()npcStale=true end)out[#out+1]={model=m,target=h}return true
-end
-local function scanChildren(out,parent,model,pat)
-local fd=false
-for _,v in ipairs(parent:GetChildren())do
-if v:IsA("Model")and string.match(v.Name,pat)and cacheAdd(out,model,liveHum(v))then fd=true end
-end return fd
-end
-local function scanNPCs(force)
-if not force and not npcStale then return npcCache end
-table.clear(npcOut)
-local out,chs=npcOut,workspace:GetChildren()
-for _,m in ipairs(chs)do
-if m:IsA("Model")and m.Name=="Hermes"then
-if not scanChildren(out,m,m,"^Launcher%d+$")then cacheAdd(out,m,liveHum(m))end
-end
-end
-for _,m in ipairs(chs)do
-if m:IsA("Model")and m.Name=="Drone"then cacheAdd(out,m,liveHum(m))end
-end
-for _,m in ipairs(chs)do
-if m:IsA("Model")and not P:GetPlayerFromCharacter(m)and m.Name~="Model"and m.Name~="Folder"and m.Name~="Hermes"and not EX[m.Name]then
-if m.Name=="Platform"then
-local fd2=false
-for _,v in ipairs(m:GetDescendants())do
-if v:IsA("Model")and string.match(v.Name,"^Emplacement%d+$")then
-if cacheAdd(out,m,liveHum(v))then fd2=true end
-end
-end
-if not fd2 then cacheAdd(out,m,liveHum(m))end
-elseif m.Name=="Tank"then
-if not scanChildren(out,m,m,"^PropaneTank$")then cacheAdd(out,m,liveHum(m))end
-elseif m.Name=="APU"then
-cacheAdd(out,m,liveHum(m:FindFirstChild("Pilot"))or liveHum(m))
-else cacheAdd(out,m,liveHum(m))end
-end
-end
-npcCache,npcStale=out,false
-if _G.killauraDebug then
-local n={}for _,e in ipairs(out)do n[#n+1]=e.model.Name end
-print("[killaura] cache ("..#out.."): "..table.concat(n,", "))
-end return out
-end
-local function bringNPCs()
-local h=getHRP()if not h then return end
-local fwd,yaw=h.CFrame.LookVector,h.Orientation.Y
-for _,e in ipairs(scanNPCs(false))do
-if e.target.Parent and e.target.Health>0 and not NTP[e.model.Name]then
-local pp=e.model.PrimaryPart or e.model:FindFirstChild("HumanoidRootPart")
-if pp then
-local d=e.model.Name=="Tank"and TD or DD
-e.model:PivotTo(CFrame.new(h.Position+fwd*d)*CFrame.Angles(0,math.rad(yaw),0))
-end
-end
-end
-end
-local function destroyLandmines()
-local any for _,o in ipairs(workspace:GetChildren())do if o.Name=="Landmine"then o:Destroy()any=true end end
-if any then notify("System","Landmine cleared",4)end
-end
-local function firePrompt(name)
-for _,o in ipairs(workspace:GetDescendants())do
-if o:IsA("ProximityPrompt")and string.find(o.ObjectText or"",name,1,true)then
-pcall(fireproximityprompt,o)return
-end
-end notify("Automation Error","Prompt not found: "..name,4)
-end
-local function refreshWeapon()
-if cachedWpn and cachedWpn.Parent and cachedWpn.Parent==LP.Character then return cachedWpn end
-local function find(c)
-if not c then return end
-for _,t in ipairs(c:GetChildren())do
-if t:IsA("Tool")and(t:GetAttribute("Class")=="Melee"or t.Name=="Shovel")then
-local v=t:FindFirstChild("VerifyHit")if v and v:IsA("RemoteEvent")then return t end
-end
-end
-end
-cachedWpn=find(LP.Character)or find(LP:FindFirstChild("Backpack"))return cachedWpn
-end
-local function atkInterval(n)
-if n==0 then return RI end if n<=TL then return AM end if n>=TH then return AB end
-return AM+(AB-AM)*((n-TL)/(TH-TL))
-end
-local DISPLAY={Man="Infantry",Launcher1="Launcher I",Launcher2="Launcher II",Launcher3="Launcher III",Launcher4="Launcher IV",Emplacement1="Emplacement",PropaneTank="Propane Weakpoint"}
-local c1,c2,c3,c4=R(255,70,70),R(255,140,50),R(255,200,80),R(220,220,230)
-local COLORS={Launcher1=c1,Launcher2=c1,Launcher3=c1,Launcher4=c1,Hermes=c1,APU=c2,Drone=c3,Emplacement1=c3,Tank=c4,Platform=c4}
-local DCOL=N3(1,1,1)
-local ORDER={"Launcher1","Launcher2","Launcher3","Launcher4","Hermes","APU","Drone","Emplacement1","Tank","Platform","Man","Turret","PropaneTank"}
-local ORDSET={}for _,t in ipairs(ORDER)do ORDSET[t]=true end
-local hudGui,hudCont,hudBg,hudLabel,hudHide,hudShown,hudTw
-local function initHUD()
-hudGui=I("ScreenGui",game.CoreGui,{Name="KillauraHUD",ResetOnSpawn=false,DisplayOrder=100})GE[K.hg]=hudGui
-hudCont=I("Frame",hudGui,{AnchorPoint=V2(1,0),BackgroundTransparency=1,Size=U2(HW,0,0,0),AutomaticSize=E.AutomaticSize.Y,Position=U2(1,0,HY,0)})
-hudBg=I("Frame",hudCont,{BackgroundColor3=R(12,12,18),BorderSizePixel=0,AutomaticSize=E.AutomaticSize.Y,Size=U2(1,0,0,0)})
-I("UICorner",hudBg,{CornerRadius=U1(0,6)})
-I("UIPadding",hudBg,{PaddingTop=U1(0,8),PaddingBottom=U1(0,8),PaddingLeft=U1(0,12),PaddingRight=U1(0,12)})
-hudLabel=I("TextLabel",hudBg,{BackgroundTransparency=1,Font=E.Font.GothamMedium,TextSize=14,TextXAlignment=E.TextXAlignment.Right,RichText=true,Text="",AutomaticSize=E.AutomaticSize.Y,Size=U2(1,0,0,0)})
-end
-local function showHUD(counts)
-if not hudGui then initHUD()end
-local total,lines=0,{"<font size='12' face='GothamBold' color='rgb(160,160,180)'>KILLAURA</font>"}
-for _,t in ipairs(ORDER)do local c=counts[t]if c and c>0 then total=total+c local cl=COLORS[t]or DCOL lines[#lines+1]="<font color='rgb("..F(cl.R*255)..","..F(cl.G*255)..","..F(cl.B*255)..")'>"..(DISPLAY[t]or t).."  x"..c.."</font>" end end
-for t,c in pairs(counts)do if not ORDSET[t]and c>0 then total=total+c local cl=COLORS[t]or DCOL lines[#lines+1]="<font color='rgb("..F(cl.R*255)..","..F(cl.G*255)..","..F(cl.B*255)..")'>"..(DISPLAY[t]or t).."  x"..c.."</font>" end end
-lines[#lines+1]=string.format("<font size='13' face='GothamBold'>Total: %d target%s</font>",total,total==1 and""or"s")
-local txt=table.concat(lines,"\n")
-if txt~=cachedHTML then
-cachedHTML=txt
-hudLabel.Text=txt
-local stripped=txt:gsub("<[^>]+>","")
-cachedW=X:GetTextSize(stripped,hudLabel.TextSize,hudLabel.Font,V2(math.huge,math.huge)).X
-end
-local vp=cam.ViewportSize
-hudCont.Size=U2(math.clamp((cachedW+32)/vp.X,HW,HX),0,0,0)
-if hudHide then task.cancel(hudHide)hudHide=nil end
-if hudTw then hudTw:Cancel()hudTw=nil end
-if not hudShown then hudShown=true hudBg.Visible=true end
-hudBg.BackgroundTransparency=.2
-hudHide=task.delay(HL,function()
-if not hudShown or not hudGui or not hudGui.Parent then return end
-hudTw=T:Create(hudBg,TweenInfo.new(HF,E.EasingStyle.Quad,E.EasingDirection.In),{BackgroundTransparency=1})
-hudTw:Play()hudTw.Completed:Once(function()hudShown=false hudBg.Visible=false hudTw=nil end)
-end)
-end
-local function attackBatch(targets)
-if #targets==0 or not holdingTool()then return 0 end
-local w=refreshWeapon()if not w then return 0 end
-local vh=w:FindFirstChild("VerifyHit")
-if not vh or not vh:IsA("RemoteEvent")or not vh.Parent then cachedWpn=nil return 0 end
-local tk,counts,fired=token(),{},0
-for i=1,#targets do
-if not kaOn then break end local e=targets[i]local h=e.target
-if h.Parent and h.Health>0 and e.model.Parent then
-pcall(function()vh:FireServer(h,tk)end)local n=e.model.Name counts[n]=(counts[n]or 0)+1 fired=fired+1
-end
-end
-if next(counts)then showHUD(counts)end return fired
-end
-local function resetBurst()GE[K.tgt]=nil GE[K.lk]=false GE[K.bs]=false end
-local function cleanupMultiplier()
-if not GE[K.mtMod]then return end
-pcall(function()local m=getrawmetatable(game)setreadonly(m,false)
-if m.__namecall==GE[K.hook]then m.__namecall=GE[K.orig]end setreadonly(m,true)
-end)resetBurst()GE[K.mtMod]=false
-end
-local function setupMultiplier()
-if GE[K.mtMod]then cleanupMultiplier()end
-pcall(function()
-local m=getrawmetatable(game)setreadonly(m,false)
-GE[K.orig]=m.__namecall
-GE[K.hook]=newcclosure(function(self,...)
-local method,args=getnamecallmethod(),{...}
-if _G.multiplier and method=="FireServer"and tostring(self)=="VerifyHit"
-and LP.Character and self:IsDescendantOf(LP.Character)then
-local tgt=args[1]
-if tgt and tgt:IsA("Humanoid")and(not GE[K.bs]or GE[K.tgt]~=tgt)then
-GE[K.tgt]=tgt GE[K.lk]=true GE[K.bs]=true
+
+-- Background cleanup of throttle timestamps
 task.spawn(function()
-local n,active=1,GE[K.tgt]
-while GE[K.lk]and active==GE[K.tgt]do
-if not LP.Character or not self:IsDescendantOf(LP.Character)then
-if active==GE[K.tgt]then resetBurst()end break end
-if not active.Parent or active.Health<=0 then
-if active==GE[K.tgt]then resetBurst()end break end
-n=n+1
-pcall(function()
-local pos=args[3]
-if typeof(pos)=="Vector3"then local v=.01
-local na={args[1],args[2],Vector3.new(pos.X+math.random()*v-v/2,pos.Y+math.random()*v-v/2,pos.Z+math.random()*v-v/2)}
-for j=4,#args do na[j]=args[j]end self.FireServer(self,unpack(na))
-else self.FireServer(self,unpack(args))end
+    while true do
+        task.wait(60)
+        local now = tick()
+        for msg, ts in pairs(notificationThrottleTimestamps) do
+            if now - ts > 120 then
+                notificationThrottleTimestamps[msg] = nil
+            end
+        end
+    end
 end)
-if n>BC then if active==GE[K.tgt]then resetBurst()end break end
-tw(BD)
+
+-- ============================================================================
+-- Utility helpers
+-- ============================================================================
+local function notify(title, content, duration) Fluent:Notify({Title=title, Content=content, Duration=duration or 5}) end
+local function getLocalPlayerHRP() return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") end
+local function isHoldingTool() local character = LocalPlayer.Character return character and character:FindFirstChildOfClass("Tool") ~= nil end
+
+-- Raycast for mouse position
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.FilterDescendantsInstances = { Camera }
+local function getMouseWorldPosition()
+    local mouseLocation = UserInputService:GetMouseLocation()
+    local ray = Camera:ViewportPointToRay(mouseLocation.X, mouseLocation.Y)
+    local hit = workspace:Raycast(Camera.CFrame.Position, ray.Direction * 1000, rayParams)
+    return hit and hit.Position
 end
-end)
+
+local function generateSwingToken() swingCounter = swingCounter + 1 return "sweep_" .. swingCounter .. "_" .. math.random(1000, 9999) end
+local function getLiveHumanoid(model)
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Health > 0 then return hum end
 end
-end return GE[K.orig](self,...)
+
+-- Workspace child tracking
+getgenv()._wsChildAddedConn = workspace.ChildAdded:Connect(function(c)
+    if c:IsA("Model") then npcStale = true end
 end)
-m.__namecall=GE[K.hook]setreadonly(m,true)GE[K.mtMod]=true
+getgenv()._wsChildRemovedConn = workspace.ChildRemoved:Connect(function(c)
+    if c:IsA("Model") then npcStale = true end
 end)
+
+-- ============================================================================
+-- NPC Cache helpers
+-- ============================================================================
+local function cacheAddTarget(staging, model, humanoid)
+    if not humanoid then return false end
+    humanoid.Died:Once(function() npcStale = true end)
+    staging[#staging+1] = {model=model, target=humanoid}
+    return true
 end
-local function spawnGuard(key,fn)if GE[key]then return end GE[key]=true task.spawn(fn)end
-spawnGuard(K.pl,function()
-while true do
-if cfg.isPDCChargesEnabled or cfg.isSuperWeaponsEnabled then
-local t=LP.Character and LP.Character:FindFirstChildOfClass("Tool")
-if t then
-if cfg.isPDCChargesEnabled and t.Name=="PDC kit"then
-t:SetAttribute("Charges",999)t:SetAttribute("MaxCharges",999)
-t:SetAttribute("Cooldown",.1)t:SetAttribute("AutoReload",true)
-t:SetAttribute("ContinuousFire",true)t:SetAttribute("Unlimited",true)
-elseif cfg.isSuperWeaponsEnabled and t.Name~="RPG"and t.Name~="Parabolic Hydra"
-and t.Name~="Grenade Launcher"and t.Name~="PDC kit"then
-t:SetAttribute("Ammo",999)
+
+local function scanModelChildren(staging, parent, model, pattern)
+    local foundAny = false
+    for _, child in ipairs(parent:GetChildren()) do
+        if child:IsA("Model") and string.match(child.Name, pattern) and cacheAddTarget(staging, model, getLiveHumanoid(child)) then
+            foundAny = true
+        end
+    end
+    return foundAny
 end
+
+--[[
+    scanNPCs(force)
+        Single‑pass workspace scan. Uses double‑buffered cache.
+]]
+local function scanNPCs(force)
+    if not force and not npcStale then return npcCache end
+
+    local staging = useBufA and npcBufB or npcBufA
+    table.clear(staging)
+    local children = workspace:GetChildren()
+
+    for _, model in ipairs(children) do
+        if not model:IsA("Model") then continue end
+        if PlayersService:GetPlayerFromCharacter(model) then continue end
+
+        local name = model.Name
+
+        if name == "Hermes" then
+            if not scanModelChildren(staging, model, model, "^Launcher%d+$") then
+                cacheAddTarget(staging, model, getLiveHumanoid(model))
+            end
+        elseif name == "Drone" then
+            cacheAddTarget(staging, model, getLiveHumanoid(model))
+        elseif EXCLUDED[name] then continue
+        elseif name ~= "Model" and name ~= "Folder" then
+            if name == "Platform" then
+                local found = false
+                for _, child in ipairs(model:GetDescendants()) do
+                    if child:IsA("Model") and string.match(child.Name, "^Emplacement%d+$") then
+                        if cacheAddTarget(staging, model, getLiveHumanoid(child)) then found = true end
+                    end
+                end
+                if not found then cacheAddTarget(staging, model, getLiveHumanoid(model)) end
+            elseif name == "Tank" then
+                if not scanModelChildren(staging, model, model, "^PropaneTank$") then
+                    cacheAddTarget(staging, model, getLiveHumanoid(model))
+                end
+            elseif name == "APU" then
+                cacheAddTarget(staging, model, getLiveHumanoid(model:FindFirstChild("Pilot")) or getLiveHumanoid(model))
+            else
+                cacheAddTarget(staging, model, getLiveHumanoid(model))
+            end
+        end
+    end
+
+    npcCache = staging
+    useBufA = not useBufA
+    npcStale = false
+
+    if _G.killauraDebug then
+        local names = {}
+        for _, e in ipairs(staging) do names[#names+1] = e.model.Name end
+        print("[killaura] cache (" .. #staging .. "): " .. table.concat(names, ", "))
+    end
+    return npcCache
 end
-end tw(AI)
+
+-- ============================================================================
+-- Teleport NPCs
+-- ============================================================================
+local function bringNPCs()
+    local hrp = getLocalPlayerHRP() if not hrp then return end
+    local forward = hrp.CFrame.LookVector
+    local yaw = hrp.Orientation.Y
+    for _, entry in ipairs(scanNPCs(false)) do
+        if entry.target.Parent and entry.target.Health > 0 and not NOT_TELEPORTABLE[entry.model.Name] then
+            local primaryPart = entry.model.PrimaryPart or entry.model:FindFirstChild("HumanoidRootPart")
+            if primaryPart then
+                local distance = entry.model.Name == "Tank" and CONFIG.tuning.tankDistance or CONFIG.tuning.defaultDistance
+                pcall(function()
+                    entry.model:PivotTo(CFrame.new(hrp.Position + forward * distance) * CFrame.Angles(0, math.rad(yaw), 0))
+                end)
+            end
+        end
+    end
 end
-end)
-local function findMercy()
-return(LP.Character and LP.Character:FindFirstChild("Mercy Kill"))or LP.Backpack:FindFirstChild("Mercy Kill")
+
+-- ============================================================================
+-- Landmine destruction
+-- ============================================================================
+local function destroyLandmines()
+    local any
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj.Name == "Landmine" then obj:Destroy(); any = true end
+    end
+    if any then notify("System", "Landmine cleared", 4) end
 end
-GE[K.ibc]=U.InputBegan:Connect(function(inp,gp)
-if gp then return end
-if inp.KeyCode==E.KeyCode.Semicolon then GE[K.sd]=true
-elseif inp.KeyCode==E.KeyCode.Q then GE[K.qd]=true end
-end)
-GE[K.iec]=U.InputEnded:Connect(function(inp)
-if inp.KeyCode==E.KeyCode.Semicolon then GE[K.sd]=false
-elseif inp.KeyCode==E.KeyCode.Q then GE[K.qd]=false end
-end)
-spawnGuard(K.ml,function()
-while true do
-if cfg.isMercyKillMouseEnabled and GE[K.sd]then
-local pos,mk=mousePos(),findMercy()
-if pos and mk then mk.VerifyHit:FireServer(nil,pos)end
-end tw(.1)
+
+-- ============================================================================
+-- Proximity prompt fire (Step 6: cache invalidation via DescendantRemoving)
+-- ============================================================================
+local promptCache = {}
+local function firePrompt(promptName)
+    -- Check cache first
+    local cached = promptCache[promptName]
+    if cached and cached.Parent then
+        pcall(fireproximityprompt, cached)
+        return
+    end
+
+    -- Search and cache
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and string.find(obj.ObjectText or "", promptName, 1, true) then
+            promptCache[promptName] = obj
+            pcall(fireproximityprompt, obj)
+            return
+        end
+    end
+    notify("Automation Error", "Prompt not found: " .. promptName, 4)
 end
+
+-- Invalidate cached prompts when they are removed
+workspace.DescendantRemoving:Connect(function(descendant)
+    if descendant:IsA("ProximityPrompt") then
+        for name, prompt in pairs(promptCache) do
+            if prompt == descendant then
+                promptCache[name] = nil
+            end
+        end
+    end
 end)
-spawnGuard(K.kl,function()
-while true do
-if cfg.isMercyKillEnabled and not cfg.isMercyKillMouseEnabled and GE[K.sd]then
-local hrp,mk=getHRP(),findMercy()
-if hrp and mk then mk.VerifyHit:FireServer(nil,hrp.Position)end
-end tw(MD)
+
+-- ============================================================================
+-- Weapon detection
+-- ============================================================================
+local function refreshWeapon()
+    if cachedWeapon and cachedWeapon.Parent and cachedWeapon.Parent == LocalPlayer.Character then
+        return cachedWeapon
+    end
+    local function findWeaponIn(container)
+        if not container then return end
+        for _, tool in ipairs(container:GetChildren()) do
+            if tool:IsA("Tool") and (tool:GetAttribute("Class") == "Melee" or tool.Name == "Shovel") then
+                local vh = tool:FindFirstChild("VerifyHit")
+                if vh and vh:IsA("RemoteEvent") then return tool end
+            end
+        end
+    end
+    cachedWeapon = findWeaponIn(LocalPlayer.Character) or findWeaponIn(LocalPlayer:FindFirstChild("Backpack"))
+    if not cachedWeapon then
+        notifyThrottled("Melee weapon not found – equip a shovel or melee tool.", 10)
+    end
+    return cachedWeapon
 end
-end)
-spawnGuard(K.bl,function()
-while true do
-if cfg.isBolterCoinHitEnabled and GE[K.qd]then
-local pos=mousePos()local pm=workspace:FindFirstChild(LP.Name)
-local b=pm and pm:FindFirstChild("Bolter")
-if pos and b and b:FindFirstChild("VerifyCoinHit")then b.VerifyCoinHit:FireServer(pos)end
-end tw(BL)
+
+-- ============================================================================
+-- Attack interval calculation
+-- ============================================================================
+local function calculateAttackInterval(targetCount)
+    if targetCount == 0 then return CONFIG.tuning.rescanInterval end
+    if targetCount <= CONFIG.tuning.lowTargetThreshold then return CONFIG.tuning.attackMinDelay end
+    if targetCount >= CONFIG.tuning.highTargetThreshold then return CONFIG.tuning.attackBaseDelay end
+    return CONFIG.tuning.attackMinDelay +
+        (CONFIG.tuning.attackBaseDelay - CONFIG.tuning.attackMinDelay) *
+        ((targetCount - CONFIG.tuning.lowTargetThreshold) / (CONFIG.tuning.highTargetThreshold - CONFIG.tuning.lowTargetThreshold))
 end
-end)
-spawnGuard(K.av,function()
-while true do
-if cfg.isAutoVoteEnabled then pcall(function()
-local r=RS:FindFirstChild("Remotes")local w=r and r:FindFirstChild("Waves")
-local v=w and w:FindFirstChild("Vote")if v then v:InvokeServer()end
-end)end tw(VD)
+
+-- ============================================================================
+-- HUD display
+-- ============================================================================
+local DISPLAY = { Tank="Tank", Drone="Drone", Hermes="Hermes", APU="APU", Platform="Platform", Man="Infantry",
+    Turret="Turret", Launcher1="Launcher I", Launcher2="Launcher II", Launcher3="Launcher III",
+    Launcher4="Launcher IV", Emplacement1="Emplacement", PropaneTank="Propane Weakpoint" }
+local COLORS = {
+    Launcher1=Color3.fromRGB(255,70,70), Launcher2=Color3.fromRGB(255,70,70),
+    Launcher3=Color3.fromRGB(255,70,70), Launcher4=Color3.fromRGB(255,70,70),
+    Hermes=Color3.fromRGB(255,70,70), APU=Color3.fromRGB(255,140,50),
+    Drone=Color3.fromRGB(255,200,80), Emplacement1=Color3.fromRGB(255,200,80),
+    Tank=Color3.fromRGB(220,220,230), Platform=Color3.fromRGB(220,220,230) }
+local DEFAULT_COLOR = Color3.fromRGB(255,255,255)
+local ORDERED_TYPES = { "Launcher1","Launcher2","Launcher3","Launcher4","Hermes","APU","Drone",
+    "Emplacement1","Tank","Platform","Man","Turret","PropaneTank" }
+local orderedSet = {} for _, t in ipairs(ORDERED_TYPES) do orderedSet[t] = true end
+
+local hudGui, hudContainer, hudBackground, hudLabel, hudHideTask, hudShown, hudFadeTween
+
+local function initHUD()
+    hudGui = Instance.new("ScreenGui")
+    hudGui.Name = "KillauraHUD"
+    hudGui.ResetOnSpawn = false
+    hudGui.DisplayOrder = 100
+    hudGui.Parent = game:GetService("CoreGui")
+    getgenv()._hudGui = hudGui
+
+    hudContainer = Instance.new("Frame")
+    hudContainer.BackgroundTransparency = 1
+    hudContainer.AutomaticSize = Enum.AutomaticSize.Y
+    hudContainer.Parent = hudGui
+
+    hudBackground = Instance.new("Frame")
+    hudBackground.BackgroundColor3 = Color3.fromRGB(12,12,18)
+    hudBackground.BorderSizePixel = 0
+    hudBackground.AutomaticSize = Enum.AutomaticSize.Y
+    hudBackground.Size = UDim2.new(1,0,0,0)
+    hudBackground.Parent = hudContainer
+    local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0,6); corner.Parent = hudBackground
+    local padding = Instance.new("UIPadding")
+    padding.PaddingTop, padding.PaddingBottom, padding.PaddingLeft, padding.PaddingRight =
+        UDim.new(0,8), UDim.new(0,8), UDim.new(0,12), UDim.new(0,12)
+    padding.Parent = hudBackground
+
+    hudLabel = Instance.new("TextLabel")
+    hudLabel.BackgroundTransparency = 1
+    hudLabel.Font = Enum.Font.GothamMedium
+    hudLabel.TextSize = 14
+    hudLabel.TextXAlignment = Enum.TextXAlignment.Right
+    hudLabel.RichText = true
+    hudLabel.Text = ""
+    hudLabel.AutomaticSize = Enum.AutomaticSize.Y
+    hudLabel.Size = UDim2.new(1,0,0,0)
+    hudLabel.Parent = hudBackground
 end
+
+local function formatLine(typeName, count)
+    local col = COLORS[typeName] or DEFAULT_COLOR
+    return string.format("<font color='rgb(%d,%d,%d)'>%s  x%d</font>",
+        math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255),
+        DISPLAY[typeName] or typeName, count)
+end
+
+local function applyHUDPosition()
+    local pos = config.hud.position or "top-right"
+    local anchorX, anchorY, px, py, yOffset
+
+    if pos == "top-right" then
+        anchorX, anchorY, px, py = 1, 0, 1, 0
+        yOffset = config.hud.yPosition or 0.86
+    elseif pos == "bottom-right" then
+        anchorX, anchorY, px, py = 1, 1, 1, -10
+        yOffset = 1
+    elseif pos == "top-left" then
+        anchorX, anchorY, px, py = 0, 0, 0, 10
+        yOffset = config.hud.yPosition or 0.86
+    elseif pos == "bottom-left" then
+        anchorX, anchorY, px, py = 0, 1, 0, 10
+        yOffset = 1
+    else
+        anchorX, anchorY, px, py = 1, 0, 1, 0
+        yOffset = config.hud.yPosition or 0.86
+    end
+
+    if hudContainer then
+        hudContainer.AnchorPoint = Vector2.new(anchorX, anchorY)
+        hudContainer.Position = UDim2.new(px, 0, yOffset, 0)
+    end
+end
+
+local function showHUD(counts)
+    if not config.hud.enabled then return end
+    if not hudGui then initHUD() end
+    applyHUDPosition()
+
+    local total = 0
+    local lines = { "<b><font size='12'>KILLAURA</font></b>" }
+    for _, typeName in ipairs(ORDERED_TYPES) do
+        local cnt = counts[typeName]
+        if cnt and cnt > 0 then total = total + cnt; lines[#lines+1] = formatLine(typeName, cnt) end
+    end
+    for typeName, cnt in pairs(counts) do
+        if not orderedSet[typeName] and cnt > 0 then total = total + cnt; lines[#lines+1] = formatLine(typeName, cnt) end
+    end
+    lines[#lines+1] = string.format("<b><font size='13'>Total: %d target%s</font></b>", total, total==1 and "" or "s")
+    hudLabel.Text = table.concat(lines, "\n")
+
+    local viewportSize = Camera.ViewportSize
+    local stripped = hudLabel.Text:gsub("<[^>]+>", "")
+    local textWidth = TextService:GetTextSize(stripped, 14, Enum.Font.GothamMedium, Vector2.new(math.huge, math.huge)).X
+    local containerWidth = math.clamp((textWidth + 24) / viewportSize.X, config.hud.minWidth, config.hud.maxWidth)
+    hudContainer.Size = UDim2.new(containerWidth, 0, 0, 0)
+
+    if hudHideTask then task.cancel(hudHideTask); hudHideTask = nil end
+    if hudFadeTween then hudFadeTween:Cancel(); hudFadeTween = nil end
+    if not hudShown then
+        hudShown = true
+        hudBackground.Visible = true
+    end
+    hudBackground.BackgroundTransparency = 0.2
+
+    hudHideTask = task.delay(config.hud.holdDuration, function()
+        if not hudShown or not hudGui or not hudGui.Parent then return end
+        hudFadeTween = TweenService:Create(hudBackground,
+            TweenInfo.new(config.hud.fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            {BackgroundTransparency = 1})
+        hudFadeTween:Play()
+        hudFadeTween.Completed:Once(function()
+            hudShown = false
+            hudBackground.Visible = false
+            hudFadeTween = nil
+        end)
+    end)
+end
+
+-- ============================================================================
+-- Persistent killaura status indicator (Step 8)
+-- ============================================================================
+local statusGui, statusLabel
+local function updateStatusIndicator()
+    if not config.hud.showStatusIndicator then
+        if statusGui then statusGui:Destroy(); statusGui = nil end
+        return
+    end
+    if not statusGui then
+        statusGui = Instance.new("ScreenGui")
+        statusGui.Name = "KAStatus"
+        statusGui.ResetOnSpawn = false
+        statusGui.DisplayOrder = 99
+        statusGui.Parent = game:GetService("CoreGui")
+        getgenv()._statusGui = statusGui
+
+        statusLabel = Instance.new("TextLabel")
+        statusLabel.BackgroundTransparency = 1
+        statusLabel.Font = Enum.Font.GothamBold
+        statusLabel.TextSize = 18
+        statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        statusLabel.TextXAlignment = Enum.TextXAlignment.Center
+        statusLabel.Text = "KA OFF"
+        statusLabel.Position = UDim2.new(0.5, 0, 0, 10)
+        statusLabel.AnchorPoint = Vector2.new(0.5, 0)
+        statusLabel.AutomaticSize = Enum.AutomaticSize.XY
+        statusLabel.Parent = statusGui
+    end
+    if killauraActive then
+        statusLabel.Text = "KA ON"
+        statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    else
+        statusLabel.Text = "KA OFF"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+end
+
+-- Call whenever killaura active state changes
+local function setKillauraActive(state)
+    killauraActive = state
+    updateStatusIndicator()
+end
+
+-- ============================================================================
+-- Killaura attack logic
+-- ============================================================================
+local consecutiveFireFailures = 0
+local lastFailurePauseTime = 0
+local function attackBatch(targets)
+    if #targets == 0 or not isHoldingTool() then return 0 end
+    local weapon = refreshWeapon() if not weapon then return 0 end
+    local verifyHitRemote = weapon:FindFirstChild("VerifyHit")
+    if not verifyHitRemote or not verifyHitRemote:IsA("RemoteEvent") or not verifyHitRemote.Parent then
+        cachedWeapon = nil
+        return 0
+    end
+    local swingToken = generateSwingToken()
+    local counts, fired = {}, 0
+    for i = 1, #targets do
+        if not killauraActive then break end
+        local entry = targets[i]
+        local hum = entry.target
+        if hum.Parent and hum.Health > 0 and entry.model.Parent then
+            local success, err = pcall(function() verifyHitRemote:FireServer(hum, swingToken) end)
+            if success then
+                consecutiveFireFailures = 0
+                local modelName = entry.model.Name
+                counts[modelName] = (counts[modelName] or 0) + 1
+                fired = fired + 1
+            else
+                consecutiveFireFailures = consecutiveFireFailures + 1
+                if consecutiveFireFailures > 10 and tick() - lastFailurePauseTime > 2 then
+                    lastFailurePauseTime = tick()
+                    notifyThrottled("Killaura FireServer failing – pausing attacks for 2s", 10)
+                    task.wait(2)
+                    consecutiveFireFailures = 0
+                end
+            end
+        end
+    end
+    if next(counts) then showHUD(counts) end
+    return fired
+end
+
+-- ============================================================================
+-- Damage multiplier hook (Step 1: reuse jitteredArgs table)
+-- ============================================================================
+local function resetBurstState() currentTargetHumanoid, targetLocked, isBursting = nil, false, false end
+
+local function cleanupMultiplier()
+    if not metatableModified then return end
+    pcall(function()
+        setreadonly(gameMetatable, false)
+        if gameMetatable.__namecall == savedHook then gameMetatable.__namecall = originalNamecall end
+        setreadonly(gameMetatable, true)
+    end)
+    resetBurstState()
+    metatableModified = false
+end
+
+local function setupMultiplier()
+    if metatableModified then cleanupMultiplier() end
+    pcall(function()
+        gameMetatable = getrawmetatable(game)
+        setreadonly(gameMetatable, false)
+        originalNamecall = gameMetatable.__namecall
+
+        savedHook = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if _G.multiplier and method == "FireServer" and tostring(self) == "VerifyHit"
+                and LocalPlayer.Character and self:IsDescendantOf(LocalPlayer.Character) then
+                local targetHumanoid = ...
+                if targetHumanoid and targetHumanoid:IsA("Humanoid") and (not isBursting or currentTargetHumanoid ~= targetHumanoid) then
+                    local origArgs = { ... }
+                    currentTargetHumanoid, targetLocked, isBursting = targetHumanoid, true, true
+                    -- Pre-allocate reusable jitteredArgs table
+                    local jitteredArgs = {}
+                    task.spawn(function()
+                        local iteration = 1
+                        local active = currentTargetHumanoid
+                        while targetLocked and active == currentTargetHumanoid do
+                            if not LocalPlayer.Character or not self:IsDescendantOf(LocalPlayer.Character) then
+                                if active == currentTargetHumanoid then resetBurstState() end break
+                            end
+                            if not active.Parent or active.Health <= 0 then
+                                if active == currentTargetHumanoid then resetBurstState() end break
+                            end
+                            iteration = iteration + 1
+                            pcall(function()
+                                local pos = origArgs[3]
+                                if typeof(pos) == "Vector3" then
+                                    local jitter = 0.01
+                                    local jitteredPos = Vector3.new(
+                                        pos.X + math.random()*jitter - jitter/2,
+                                        pos.Y + math.random()*jitter - jitter/2,
+                                        pos.Z + math.random()*jitter - jitter/2)
+                                    -- Reuse table, clearing and refilling
+                                    table.clear(jitteredArgs)
+                                    jitteredArgs[1] = origArgs[1]
+                                    jitteredArgs[2] = origArgs[2]
+                                    jitteredArgs[3] = jitteredPos
+                                    for j = 4, #origArgs do
+                                        jitteredArgs[j] = origArgs[j]
+                                    end
+                                    self.FireServer(self, unpack(jitteredArgs))
+                                else
+                                    self.FireServer(self, unpack(origArgs))
+                                end
+                            end)
+                            if iteration > CONFIG.tuning.burstCap then
+                                if active == currentTargetHumanoid then resetBurstState() end break
+                            end
+                            task.wait(CONFIG.tuning.burstDelay)
+                        end
+                    end)
+                end
+            end
+            return originalNamecall(self, ...)
+        end)
+        gameMetatable.__namecall = savedHook
+        setreadonly(gameMetatable, true)
+        metatableModified = true
+    end)
+end
+
+-- ============================================================================
+-- PDC / Super weapons attribute loop
+-- ============================================================================
+task.spawn(function()
+    if getgenv()._pdcLoopRunning then return end
+    getgenv()._pdcLoopRunning = true
+    while true do
+        if config.isPDCChargesEnabled or config.isSuperWeaponsEnabled then
+            local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+            if tool then
+                if config.isPDCChargesEnabled and tool.Name == "PDC kit" then
+                    tool:SetAttribute("Charges", 999); tool:SetAttribute("MaxCharges", 999)
+                    tool:SetAttribute("Cooldown", 0.1); tool:SetAttribute("AutoReload", true)
+                    tool:SetAttribute("ContinuousFire", true); tool:SetAttribute("Unlimited", true)
+                elseif config.isSuperWeaponsEnabled and tool.Name ~= "RPG" and tool.Name ~= "Parabolic Hydra"
+                    and tool.Name ~= "Grenade Launcher" and tool.Name ~= "PDC kit" then
+                    tool:SetAttribute("Ammo", 999)
+                end
+            end
+        end
+        task.wait(CONFIG.tuning.attributeRefresh)
+    end
 end)
-local tpTh,mineTh=0,0
-GE[K.hbc]=RU.Heartbeat:Connect(function(dt)
-if cfg.isTeleportEnabled then tpTh=tpTh+dt if tpTh>=TP_d then tpTh=0 bringNPCs()end end
-if cfg.shouldDestroyLandmines then mineTh=mineTh+dt if mineTh>=MI then mineTh=0 destroyLandmines()end end
+
+-- ============================================================================
+-- Mercy Kill
+-- ============================================================================
+local function findMercyTool()
+    return (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Mercy Kill"))
+        or LocalPlayer.Backpack:FindFirstChild("Mercy Kill")
+end
+
+getgenv()._inputBeganConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.Semicolon then
+        getgenv()._semiDown = true
+        if config.isMercyKillEnabled and not config.isMercyKillMouseEnabled and not mercyBusy then
+            local hrp, mercyTool = getLocalPlayerHRP(), findMercyTool()
+            if hrp and mercyTool then
+                mercyBusy = true
+                task.spawn(function()
+                    pcall(function()
+                        for _ = 1, CONFIG.tuning.mercySwings do
+                            if not getgenv()._semiDown then return end
+                            mercyTool.VerifyHit:FireServer(nil, hrp.Position)
+                            task.wait(CONFIG.tuning.mercyDelay)
+                        end
+                    end)
+                    mercyBusy = false
+                end)
+            end
+        end
+    elseif input.KeyCode == Enum.KeyCode.Q then getgenv()._qDown = true end
 end)
-local Win=Fluent:CreateWindow({
-Title="Dummies Versus Noobs | qcrylic - Premium",SubTitle="@qcrylic",TabWidth=160,
-Size=UDim2.fromOffset(580,460),Acrylic=false,Theme="Aqua",MinimizeKey=E.KeyCode.LeftControl,
+
+getgenv()._inputEndedConn = UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.Semicolon then getgenv()._semiDown = false
+    elseif input.KeyCode == Enum.KeyCode.Q then getgenv()._qDown = false end
+end)
+
+task.spawn(function()
+    if getgenv()._mercyMouseLoopRunning then return end
+    getgenv()._mercyMouseLoopRunning = true
+    while true do
+        if config.isMercyKillMouseEnabled and getgenv()._semiDown then
+            local pos, mercyTool = getMouseWorldPosition(), findMercyTool()
+            if pos and mercyTool then mercyTool.VerifyHit:FireServer(nil, pos) end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- ============================================================================
+-- Bolter Coin Hit
+-- ============================================================================
+task.spawn(function()
+    if getgenv()._bolterLoopRunning then return end
+    getgenv()._bolterLoopRunning = true
+    while true do
+        if config.isBolterCoinHitEnabled and getgenv()._qDown then
+            local pos = getMouseWorldPosition()
+            local playerModel = workspace:FindFirstChild(LocalPlayer.Name)
+            local bolter = playerModel and playerModel:FindFirstChild("Bolter")
+            if pos and bolter and bolter:FindFirstChild("VerifyCoinHit") then
+                bolter.VerifyCoinHit:FireServer(pos)
+            end
+        end
+        task.wait(CONFIG.tuning.bolterDelay)
+    end
+end)
+
+-- ============================================================================
+-- Auto Vote Waves (Step 5: responsive loop)
+-- ============================================================================
+task.spawn(function()
+    if getgenv()._autoVoteLoopRunning then return end
+    getgenv()._autoVoteLoopRunning = true
+    while true do
+        if config.isAutoVoteEnabled then
+            local found = false
+            for i = 1, CONFIG.tuning.idleVoteDelay do
+                if not config.isAutoVoteEnabled then break end
+                local vote = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+                if vote then vote = vote:FindFirstChild("Waves") end
+                if vote then vote = vote:FindFirstChild("Vote") end
+                if vote then
+                    pcall(function() vote:InvokeServer() end)
+                    found = true
+                    break
+                end
+                task.wait(1)
+            end
+            if found then
+                task.wait(CONFIG.tuning.voteDelay)
+            end
+            -- if not found, loop will start again immediately (already waited idleVoteDelay seconds)
+        else
+            task.wait(1)
+        end
+    end
+end)
+
+-- ============================================================================
+-- Heartbeat: teleport & landmine destruction
+-- ============================================================================
+local teleportTimer, landmineTimer = 0, 0
+getgenv()._heartbeatConn = RunService.Heartbeat:Connect(function(deltaTime)
+    if config.isTeleportEnabled then
+        teleportTimer = teleportTimer + deltaTime
+        if teleportTimer >= CONFIG.tuning.teleportDelay then
+            teleportTimer = 0
+            bringNPCs()
+        end
+    end
+    if config.shouldDestroyLandmines then
+        landmineTimer = landmineTimer + deltaTime
+        if landmineTimer >= CONFIG.tuning.landmineDelay then
+            landmineTimer = 0
+            destroyLandmines()
+        end
+    end
+end)
+
+-- ============================================================================
+-- Fluent UI
+-- ============================================================================
+local Window = Fluent:CreateWindow({
+    Title = "Dummies Versus Noobs | qcrylic - Premium", SubTitle = "@qcrylic", TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460), Acrylic = false, Theme = "Aqua",
+    MinimizeKey = Enum.KeyCode.LeftControl,
 })
-local Tab={
-Main=Win:AddTab({Title="Main",Icon="list"}),Combat=Win:AddTab({Title="Combat",Icon="sword"}),
-Targeting=Win:AddTab({Title="Targeting",Icon="target"}),
-Utility=Win:AddTab({Title="Utility",Icon="plus-circle"}),Settings=Win:AddTab({Title="Settings",Icon="settings"}),
+local Tabs = {
+    Main      = Window:AddTab({Title="Main",      Icon="list"}),
+    Combat    = Window:AddTab({Title="Combat",    Icon="sword"}),
+    Targeting = Window:AddTab({Title="Targeting", Icon="target"}),
+    Utility   = Window:AddTab({Title="Utility",   Icon="plus-circle"}),
+    Settings  = Window:AddTab({Title="Settings",  Icon="settings"}),
 }
-SaveManager:SetLibrary(Fluent)InterfaceManager:SetLibrary(Fluent)
+SaveManager:SetLibrary(Fluent); InterfaceManager:SetLibrary(Fluent)
 SaveManager:IgnoreThemeSettings()
-InterfaceManager:SetFolder(S.SH)SaveManager:SetFolder(S.SH.."/specific-game")
-InterfaceManager:BuildInterfaceSection(Tab.Settings)SaveManager:BuildConfigSection(Tab.Settings)
-local function addT(tab,key,title,cb)tab:AddToggle(key,{Title=title,Default=false}):OnChanged(cb)end
-addT(Tab.Main,"KillauraToggle","Killaura",function(v)
-kaOn=v cfg.killauraEnabled=v
-if kaThread then task.cancel(kaThread)kaThread=nil end
-if kaOn then
-kaThread=task.spawn(function()
-while kaOn do
-if os.clock()-lastFind>FR then scanNPCs(true)lastFind=os.clock()end
-tw(atkInterval(attackBatch(npcCache)or 0))
+InterfaceManager:SetFolder("FluentScriptHub"); SaveManager:SetFolder("FluentScriptHub/specific-game")
+InterfaceManager:BuildInterfaceSection(Tabs.Settings); SaveManager:BuildConfigSection(Tabs.Settings)
+
+local function toggle(tab, name, title, cb)
+    tab:AddToggle(name, {Title=title, Default=false}):OnChanged(cb)
 end
-end)GE[K.thread]=kaThread
-else GE[K.thread]=nil npcStale,lastFind,cachedWpn=true,0,nil end
+
+-- Killaura toggle (calls setKillauraActive for status indicator)
+toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
+    setKillauraActive(v)
+    config.killauraEnabled = v
+    if v then
+        if killauraAttackThread then pcall(coroutine.close, killauraAttackThread); killauraAttackThread = nil end
+        if killauraScanThread then pcall(coroutine.close, killauraScanThread); killauraScanThread = nil end
+
+        killauraScanThread = coroutine.create(function()
+            while killauraActive do
+                scanNPCs(true)
+                lastScanTime = tick()
+                task.wait(CONFIG.tuning.forcedRescanInterval)
+            end
+        end)
+        getgenv()._killauraScanThread = killauraScanThread
+        coroutine.resume(killauraScanThread)
+
+        killauraAttackThread = coroutine.create(function()
+            while killauraActive do
+                local fired = attackBatch(npcCache) or 0
+                task.wait(calculateAttackInterval(fired))
+            end
+        end)
+        getgenv()._killauraAttackThread = killauraAttackThread
+        coroutine.resume(killauraAttackThread)
+    else
+        if killauraScanThread then pcall(coroutine.close, killauraScanThread); killauraScanThread = nil end
+        if killauraAttackThread then pcall(coroutine.close, killauraAttackThread); killauraAttackThread = nil end
+        getgenv()._killauraScanThread = nil; getgenv()._killauraAttackThread = nil
+        npcCache, lastScanTime, cachedWeapon = {}, 0, nil
+    end
 end)
-addT(Tab.Main,"BringNPCsToggle","Bring NPCs",function(v)cfg.isTeleportEnabled=v end)
-addT(Tab.Main,"AutoVoteToggle","Auto Vote Waves",function(v)cfg.isAutoVoteEnabled=v end)
-local mercyTgl=Tab.Combat:AddToggle("MercyKillToggle",{Title="Mercy Kill",Default=false})
-local mmTgl=Tab.Combat:AddToggle("MouseMercyKillToggle",{Title="Mercy Kill (Mouse)",Default=false})
-mercyTgl:OnChanged(function(v)
-cfg.isMercyKillEnabled=v
-if v and cfg.isMercyKillMouseEnabled then cfg.isMercyKillMouseEnabled=false mmTgl:SetValue(false)end
+
+toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v) config.isTeleportEnabled = v end)
+
+toggle(Tabs.Main, "AutoVoteToggle", "Auto Vote Waves", function(v) config.isAutoVoteEnabled = v end)
+
+-- Mercy kill mutual exclusion
+local mercyToggle = Tabs.Combat:AddToggle("MercyKillToggle", {Title="Mercy Kill", Default=false})
+local mouseMercyToggle = Tabs.Combat:AddToggle("MouseMercyKillToggle", {Title="Mercy Kill (Mouse)", Default=false})
+
+mercyToggle:OnChanged(function(v)
+    config.isMercyKillEnabled = v
+    if v and config.isMercyKillMouseEnabled then
+        config.isMercyKillMouseEnabled = false
+        mouseMercyToggle:SetValue(false)
+    end
 end)
-mmTgl:OnChanged(function(v)
-cfg.isMercyKillMouseEnabled=v
-if v then
-if cfg.isMercyKillEnabled then cfg.isMercyKillEnabled=false mercyTgl:SetValue(false)end
-notify("Mercy Kill (Mouse)","Hold semicolon to fire at mouse",4)
+
+mouseMercyToggle:OnChanged(function(v)
+    config.isMercyKillMouseEnabled = v
+    if v then
+        if config.isMercyKillEnabled then
+            config.isMercyKillEnabled = false
+            mercyToggle:SetValue(false)
+        end
+        notify("Mercy Kill (Mouse)", "Hold semicolon to fire at mouse", 4)
+    end
+end)
+
+toggle(Tabs.Combat, "DamageMultiplierToggle", "Damage Multiplier",
+    function(v) _G.multiplier = v; if v then setupMultiplier() else cleanupMultiplier() end end)
+
+toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v) config.isPDCChargesEnabled = v end)
+
+toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v) config.isSuperWeaponsEnabled = v end)
+
+-- Shortcut docs
+Tabs.Combat:AddParagraph({Title = "Shortcuts", Content = "Hold [;] for Mercy Kill (targeted)  |  Hold [Q] for Bolter Coin Hit"})
+
+-- Targeting tab (Step 7: show NPC count in refresh notification)
+Tabs.Targeting:AddSection("NPC Management")
+Tabs.Targeting:AddButton({Title="Refresh NPC Cache", Description="Force refresh the NPC detection cache", Callback=function()
+    local npcCount = #scanNPCs(true)
+    notify("System", "NPC cache refreshed (" .. npcCount .. " NPCs)", 3)
+end})
+
+Tabs.Targeting:AddButton({Title="Spawn Noob Units", Description="Spawns all standard noob units to workspace", Callback=function()
+    local ex = {Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1, Achilles=1, Confidant=1, London=1, Tank=1, Platform=1, Man=1, MangleNether345=1, MegaJoe=1, Administrator=1}
+    local count = 0
+    for _, v in ipairs(game:GetService("ReplicatedStorage").Units.Noobs:GetChildren()) do
+        if not ex[v.Name] then
+            v.Parent = workspace
+            count = count + 1
+        end
+    end
+    notify("Spawn Noob Units", "Spawned " .. count .. " unit" .. (count==1 and "" or "s"), 4)
+end})
+
+toggle(Tabs.Utility, "LandmineToggle", "Destroy Landmines", function(v) config.shouldDestroyLandmines = v end)
+
+toggle(Tabs.Utility, "BolterCoinToggle", "Bolter Coin Hit (Hold Q)", function(v) config.isBolterCoinHitEnabled = v end)
+
+Tabs.Utility:AddSection("Teleportation")
+Tabs.Utility:AddButton({Title="Teleport to Lobby", Description="Teleports to lobby ingame", Callback=function()
+    local hrp = getLocalPlayerHRP()
+    if hrp then hrp.CFrame = CFrame.new(-3, -101.5, -12.5); notify("System", "Teleported to lobby", 4) end
+end})
+
+Tabs.Utility:AddButton({Title="Teleport to Map", Description="Teleports player to map", Callback=function()
+    pcall(function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:WaitForChild("HumanoidRootPart")
+        local sp = workspace.Map and workspace.Map.PlayerSpawns and workspace.Map.PlayerSpawns.SpawnLocation
+        if hrp and sp then hrp.CFrame = sp.CFrame + Vector3.new(0, 3, 0); notify("System", "Teleported to map", 4) end
+    end)
+end})
+
+Tabs.Utility:AddSection("Developer Tools")
+Tabs.Utility:AddButton({Title="Dev Tools", Description="Developer tools and utilities", Callback=function()
+    Window:Dialog({Title="Developer Tools", Buttons={
+        {Title="Dark Dex", Callback=function() loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/aaaaaaaaaaaaaa/main/darkdex"))() end},
+        {Title="Remote Spy", Callback=function() loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/78n/SimpleSpy/main/SimpleSpyBeta.lua"))() end},
+        {Title="Close", Callback=function() end},
+    }})
+end})
+
+Tabs.Utility:AddSection("Proximity Prompts")
+for _, promptInfo in ipairs({{"Modifier","Fires the Modifier prompt"},{"Armoury","Fires the Armoury prompt"},{"Ammo Fabricator","Fires the Ammo Fabricator prompt"}}) do
+    Tabs.Utility:AddButton({Title=promptInfo[1], Description=promptInfo[2], Callback=function() firePrompt(promptInfo[1]) end})
 end
+
+-- Step 6: HUD Settings with immediate feedback
+Tabs.Settings:AddSection("HUD Settings")
+Tabs.Settings:AddToggle("HUDEnabledToggle", {Title="Show Killaura HUD", Default=config.hud.enabled}):OnChanged(function(v) config.hud.enabled = v end)
+Tabs.Settings:AddSlider("HUDHoldDuration", {
+    Title = "HUD Hold Duration (seconds)",
+    Description = "How long the HUD stays before fading",
+    Default = config.hud.holdDuration,
+    Min = 0.1,
+    Max = 3.0,
+    Rounding = 1
+}):OnChanged(function(v)
+    config.hud.holdDuration = v
+    -- Step 3: if HUD is currently visible, reschedule fade with new duration
+    if hudShown and hudHideTask then
+        task.cancel(hudHideTask)
+        hudHideTask = task.delay(v, function()
+            if not hudShown or not hudGui or not hudGui.Parent then return end
+            hudFadeTween = TweenService:Create(hudBackground,
+                TweenInfo.new(config.hud.fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                {BackgroundTransparency = 1})
+            hudFadeTween:Play()
+            hudFadeTween.Completed:Once(function()
+                hudShown = false
+                hudBackground.Visible = false
+                hudFadeTween = nil
+            end)
+        end)
+    end
 end)
-addT(Tab.Combat,"DamageMultiplierToggle","Damage Multiplier",function(v)
-_G.multiplier=v if v then setupMultiplier()else cleanupMultiplier()end
+
+-- Step 2: position cycle with immediate update
+Tabs.Settings:AddButton({Title = "Cycle HUD Position", Callback = function()
+    local positions = {"top-right", "bottom-right", "top-left", "bottom-left"}
+    local current = config.hud.position
+    for i, pos in ipairs(positions) do
+        if pos == current then
+            local nextPos = positions[i%#positions + 1]
+            config.hud.position = nextPos
+            applyHUDPosition()   -- immediate visual update
+            notify("HUD Position", "Changed to " .. nextPos, 3)
+            return
+        end
+    end
+end})
+
+-- Step 8: persistent killaura status indicator toggle
+Tabs.Settings:AddToggle("KAStatusIndicator", {Title="Show Killaura Status Indicator", Default=config.hud.showStatusIndicator}):OnChanged(function(v)
+    config.hud.showStatusIndicator = v
+    updateStatusIndicator()
 end)
-addT(Tab.Combat,"PDCChargesToggle","Infinite PDC",function(v)cfg.isPDCChargesEnabled=v end)
-addT(Tab.Combat,"SuperWeaponsToggle","Infinite Ammo",function(v)cfg.isSuperWeaponsEnabled=v end)
-Tab.Targeting:AddSection("NPC Management")
-Tab.Targeting:AddButton({Title="Refresh NPC Cache",Description="Force refresh the NPC detection cache",Callback=function()
-scanNPCs(true)notify("System","NPC cache refreshed",3)
-end})
-Tab.Targeting:AddButton({Title="Spawn Noob Units",Description="Spawns all standard noob units to workspace",Callback=function()
-local ex={Dreadnought=1,["Achilles(ht)"]=1,Sparchilles=1,APU=1,APU_Operator=1,Hermes=1,Achilles=1,Confidant=1,London=1,Tank=1,Platform=1,Man=1,MangleNether345=1,MegaJoe=1,Administrator=1}
-local c=0 pcall(function()for _,v in ipairs(RS.Units.Noobs:GetChildren())do if not ex[v.Name]then v.Parent=workspace c=c+1 end end end)
-notify("Spawn Noob Units","Spawned "..c.." unit"..(c==1 and""or"s"),4)
-end})
-addT(Tab.Utility,"LandmineToggle","Destroy Landmines",function(v)cfg.shouldDestroyLandmines=v end)
-addT(Tab.Utility,"BolterCoinToggle","Bolter Coin Hit (Hold Q)",function(v)cfg.isBolterCoinHitEnabled=v end)
-Tab.Utility:AddSection("Teleportation")
-Tab.Utility:AddButton({Title="Teleport to Lobby",Description="Teleports to lobby ingame",Callback=function()
-local h=getHRP()if h then h.CFrame=CFrame.new(-3,-101.5,-12.5)notify("System","Teleported to lobby",4)end
-end})
-Tab.Utility:AddButton({Title="Teleport to Map",Description="Teleports player to map",Callback=function()
-pcall(function()
-local h=LP.Character and LP.Character:WaitForChild("HumanoidRootPart")
-local m=workspace.Map local s=m and m.PlayerSpawns and m.PlayerSpawns.SpawnLocation
-if h and s then h.CFrame=s.CFrame+Vector3.new(0,3,0)notify("System","Teleported to map",4)end
-end)
-end})
-Tab.Utility:AddSection("Developer Tools")
-Tab.Utility:AddButton({Title="Dev Tools",Description="Developer tools and utilities",Callback=function()
-Win:Dialog({Title="Developer Tools",Buttons={
-{Title="Dark Dex",Callback=function()loadstring(game:HttpGet(S.G..S.DX))()end},
-{Title="Remote Spy",Callback=function()loadstring(game:HttpGetAsync(S.G..S.SP))()end},
-{Title="Close",Callback=function()end},
-}})
-end})
-Tab.Utility:AddSection("Proximity Prompts")
-for _,name in ipairs({"Modifier","Armoury","Ammo Fabricator"})do
-Tab.Utility:AddButton({Title=name,Description="Fires the "..name.." prompt",Callback=function()firePrompt(name)end})
-end
-notify("Fluent","Script loaded!",8)Win:SelectTab(1)SaveManager:LoadAutoloadConfig()
+
+-- Shortcut docs in Settings
+Tabs.Settings:AddParagraph({Title = "Keyboard Shortcuts", Content = "Press [Left Control] to minimize the UI  |  Hold [;] for Mercy Kill  |  Hold [Q] for Bolter Coin Hit"})
+
+-- Finalize
+notify("Fluent", "Script loaded! (v2.1)", 8)
+Window:SelectTab(1)
+SaveManager:LoadAutoloadConfig()
