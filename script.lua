@@ -11,9 +11,10 @@
      6. Prompt cache invalidation on descendant removal
      7. NPC count shown in refresh button notification
      8. Persistent killaura status indicator (togglable in HUD settings)
+     9. Complete teardown of all background task.spawn threads on re-execution
 
-    Version: 2.1
-    Last modified: 2026-07-21
+    Version: 2.2
+    Last modified: 2026-10-27
 ]]
 
 -- Wait for the game to fully load
@@ -35,6 +36,18 @@ do
     if getgenv()._hudGui then pcall(function() getgenv()._hudGui:Destroy() end) end
     if getgenv()._mobileGui then pcall(function() getgenv()._mobileGui:Destroy() end) end
     if getgenv()._statusGui then pcall(function() getgenv()._statusGui:Destroy() end) end
+    
+    -- FIX: Close background task.spawn threads to prevent memory leaks on re-execution
+    if getgenv()._pdcThread then pcall(coroutine.close, getgenv()._pdcThread) end
+    if getgenv()._mercyMouseThread then pcall(coroutine.close, getgenv()._mercyMouseThread) end
+    if getgenv()._bolterThread then pcall(coroutine.close, getgenv()._bolterThread) end
+    if getgenv()._autoVoteThread then pcall(coroutine.close, getgenv()._autoVoteThread) end
+    
+    -- FIX: Reset running flags so the new execution actually initializes the loops
+    getgenv()._pdcLoopRunning = false
+    getgenv()._mercyMouseLoopRunning = false
+    getgenv()._bolterLoopRunning = false
+    getgenv()._autoVoteLoopRunning = false
 end
 
 -- Load external libraries
@@ -122,7 +135,7 @@ local CONFIG = {
         mercyDelay = 0.17,
         bolterDelay = 0.08,
         voteDelay = 1,
-        idleVoteDelay = 10,     -- seconds to wait before checking for vote again
+        idleVoteDelay = 10,
         landmineDelay = 0.5,
         teleportDelay = 0.1,
         tankDistance = 13,
@@ -136,7 +149,7 @@ local CONFIG = {
         maxWidth = 0.55,
         yPosition = 0.86,
         position = "top-right",
-        showStatusIndicator = false,  -- Step 8: persistent "KA" badge
+        showStatusIndicator = false,
     },
 }
 
@@ -183,7 +196,7 @@ local useBufA = true
 local npcStale = true
 
 -- ============================================================================
--- Notification throttle helper (Step 4: periodic cleanup)
+-- Notification throttle helper
 -- ============================================================================
 local notificationThrottleTimestamps = {}
 local function notifyThrottled(message, interval)
@@ -260,10 +273,6 @@ local function scanModelChildren(staging, parent, model, pattern)
     return foundAny
 end
 
---[[
-    scanNPCs(force)
-        Single‑pass workspace scan. Uses double‑buffered cache.
-]]
 local function scanNPCs(force)
     if not force and not npcStale then return npcCache end
 
@@ -349,18 +358,16 @@ local function destroyLandmines()
 end
 
 -- ============================================================================
--- Proximity prompt fire (Step 6: cache invalidation via DescendantRemoving)
+-- Proximity prompt fire
 -- ============================================================================
 local promptCache = {}
 local function firePrompt(promptName)
-    -- Check cache first
     local cached = promptCache[promptName]
     if cached and cached.Parent then
         pcall(fireproximityprompt, cached)
         return
     end
 
-    -- Search and cache
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("ProximityPrompt") and string.find(obj.ObjectText or "", promptName, 1, true) then
             promptCache[promptName] = obj
@@ -371,7 +378,6 @@ local function firePrompt(promptName)
     notify("Automation Error", "Prompt not found: " .. promptName, 4)
 end
 
--- Invalidate cached prompts when they are removed
 workspace.DescendantRemoving:Connect(function(descendant)
     if descendant:IsA("ProximityPrompt") then
         for name, prompt in pairs(promptCache) do
@@ -553,7 +559,7 @@ local function showHUD(counts)
 end
 
 -- ============================================================================
--- Persistent killaura status indicator (Step 8)
+-- Persistent killaura status indicator
 -- ============================================================================
 local statusGui, statusLabel
 local function updateStatusIndicator()
@@ -590,7 +596,6 @@ local function updateStatusIndicator()
     end
 end
 
--- Call whenever killaura active state changes
 local function setKillauraActive(state)
     killauraActive = state
     updateStatusIndicator()
@@ -638,7 +643,7 @@ local function attackBatch(targets)
 end
 
 -- ============================================================================
--- Damage multiplier hook (Step 1: reuse jitteredArgs table)
+-- Damage multiplier hook
 -- ============================================================================
 local function resetBurstState() currentTargetHumanoid, targetLocked, isBursting = nil, false, false end
 
@@ -668,7 +673,6 @@ local function setupMultiplier()
                 if targetHumanoid and targetHumanoid:IsA("Humanoid") and (not isBursting or currentTargetHumanoid ~= targetHumanoid) then
                     local origArgs = { ... }
                     currentTargetHumanoid, targetLocked, isBursting = targetHumanoid, true, true
-                    -- Pre-allocate reusable jitteredArgs table
                     local jitteredArgs = {}
                     task.spawn(function()
                         local iteration = 1
@@ -689,7 +693,6 @@ local function setupMultiplier()
                                         pos.X + math.random()*jitter - jitter/2,
                                         pos.Y + math.random()*jitter - jitter/2,
                                         pos.Z + math.random()*jitter - jitter/2)
-                                    -- Reuse table, clearing and refilling
                                     table.clear(jitteredArgs)
                                     jitteredArgs[1] = origArgs[1]
                                     jitteredArgs[2] = origArgs[2]
@@ -721,7 +724,7 @@ end
 -- ============================================================================
 -- PDC / Super weapons attribute loop
 -- ============================================================================
-task.spawn(function()
+getgenv()._pdcThread = task.spawn(function()
     if getgenv()._pdcLoopRunning then return end
     getgenv()._pdcLoopRunning = true
     while true do
@@ -778,7 +781,7 @@ getgenv()._inputEndedConn = UserInputService.InputEnded:Connect(function(input)
     elseif input.KeyCode == Enum.KeyCode.Q then getgenv()._qDown = false end
 end)
 
-task.spawn(function()
+getgenv()._mercyMouseThread = task.spawn(function()
     if getgenv()._mercyMouseLoopRunning then return end
     getgenv()._mercyMouseLoopRunning = true
     while true do
@@ -793,7 +796,7 @@ end)
 -- ============================================================================
 -- Bolter Coin Hit
 -- ============================================================================
-task.spawn(function()
+getgenv()._bolterThread = task.spawn(function()
     if getgenv()._bolterLoopRunning then return end
     getgenv()._bolterLoopRunning = true
     while true do
@@ -810,9 +813,9 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- Auto Vote Waves (Step 5: responsive loop)
+-- Auto Vote Waves
 -- ============================================================================
-task.spawn(function()
+getgenv()._autoVoteThread = task.spawn(function()
     if getgenv()._autoVoteLoopRunning then return end
     getgenv()._autoVoteLoopRunning = true
     while true do
@@ -833,7 +836,6 @@ task.spawn(function()
             if found then
                 task.wait(CONFIG.tuning.voteDelay)
             end
-            -- if not found, loop will start again immediately (already waited idleVoteDelay seconds)
         else
             task.wait(1)
         end
@@ -885,7 +887,6 @@ local function toggle(tab, name, title, cb)
     tab:AddToggle(name, {Title=title, Default=false}):OnChanged(cb)
 end
 
--- Killaura toggle (calls setKillauraActive for status indicator)
 toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
     setKillauraActive(v)
     config.killauraEnabled = v
@@ -923,7 +924,6 @@ toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v) config.isTeleport
 
 toggle(Tabs.Main, "AutoVoteToggle", "Auto Vote Waves", function(v) config.isAutoVoteEnabled = v end)
 
--- Mercy kill mutual exclusion
 local mercyToggle = Tabs.Combat:AddToggle("MercyKillToggle", {Title="Mercy Kill", Default=false})
 local mouseMercyToggle = Tabs.Combat:AddToggle("MouseMercyKillToggle", {Title="Mercy Kill (Mouse)", Default=false})
 
@@ -953,10 +953,8 @@ toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v) config.isPDC
 
 toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v) config.isSuperWeaponsEnabled = v end)
 
--- Shortcut docs
 Tabs.Combat:AddParagraph({Title = "Shortcuts", Content = "Hold [;] for Mercy Kill (targeted)  |  Hold [Q] for Bolter Coin Hit"})
 
--- Targeting tab (Step 7: show NPC count in refresh notification)
 Tabs.Targeting:AddSection("NPC Management")
 Tabs.Targeting:AddButton({Title="Refresh NPC Cache", Description="Force refresh the NPC detection cache", Callback=function()
     local npcCount = #scanNPCs(true)
@@ -1007,7 +1005,6 @@ for _, promptInfo in ipairs({{"Modifier","Fires the Modifier prompt"},{"Armoury"
     Tabs.Utility:AddButton({Title=promptInfo[1], Description=promptInfo[2], Callback=function() firePrompt(promptInfo[1]) end})
 end
 
--- Step 6: HUD Settings with immediate feedback
 Tabs.Settings:AddSection("HUD Settings")
 Tabs.Settings:AddToggle("HUDEnabledToggle", {Title="Show Killaura HUD", Default=config.hud.enabled}):OnChanged(function(v) config.hud.enabled = v end)
 Tabs.Settings:AddSlider("HUDHoldDuration", {
@@ -1019,7 +1016,6 @@ Tabs.Settings:AddSlider("HUDHoldDuration", {
     Rounding = 1
 }):OnChanged(function(v)
     config.hud.holdDuration = v
-    -- Step 3: if HUD is currently visible, reschedule fade with new duration
     if hudShown and hudHideTask then
         task.cancel(hudHideTask)
         hudHideTask = task.delay(v, function()
@@ -1037,7 +1033,6 @@ Tabs.Settings:AddSlider("HUDHoldDuration", {
     end
 end)
 
--- Step 2: position cycle with immediate update
 Tabs.Settings:AddButton({Title = "Cycle HUD Position", Callback = function()
     local positions = {"top-right", "bottom-right", "top-left", "bottom-left"}
     local current = config.hud.position
@@ -1045,23 +1040,20 @@ Tabs.Settings:AddButton({Title = "Cycle HUD Position", Callback = function()
         if pos == current then
             local nextPos = positions[i%#positions + 1]
             config.hud.position = nextPos
-            applyHUDPosition()   -- immediate visual update
+            applyHUDPosition()
             notify("HUD Position", "Changed to " .. nextPos, 3)
             return
         end
     end
 end})
 
--- Step 8: persistent killaura status indicator toggle
 Tabs.Settings:AddToggle("KAStatusIndicator", {Title="Show Killaura Status Indicator", Default=config.hud.showStatusIndicator}):OnChanged(function(v)
     config.hud.showStatusIndicator = v
     updateStatusIndicator()
 end)
 
--- Shortcut docs in Settings
 Tabs.Settings:AddParagraph({Title = "Keyboard Shortcuts", Content = "Press [Left Control] to minimize the UI  |  Hold [;] for Mercy Kill  |  Hold [Q] for Bolter Coin Hit"})
 
--- Finalize
-notify("Fluent", "Script loaded! (v2.1)", 8)
+notify("Fluent", "Script loaded! (v2.2)", 8)
 Window:SelectTab(1)
 SaveManager:LoadAutoloadConfig()
