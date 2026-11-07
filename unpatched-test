@@ -1,5 +1,5 @@
 --[[
-    Dummies vs Noobs Premium - v2.5 (bug-fixed)
+    Dummies vs Noobs Premium - v2.6 (bug-fixed)
     qcrylic
 
     Kept from v2.4: teardown, double-buffered NPC cache, shared lib, HUD settings,
@@ -29,6 +29,19 @@
       12. toggle cross-reset uses pcall + SetValue/Set fallback
       13. killauraEnabled is no longer restored from a stale config (the toggle
           is the source of truth), so a saved `true` cannot look armed while off
+
+    v2.6 (second pass):
+      14. killaura loops use a run id instead of coroutine.close; a rapid
+          off/on can no longer leave two attack loops running, and no thread is
+          closed while parked in task.wait
+      15. the __namecall hook is published to getgenv and unwound on the next
+          execution; hooks no longer stack one per re-exec, and _G.multiplier
+          is cleared by teardown
+      16. backpack auto-equip is throttled to 2/s instead of once per attack
+          tick, and Mercy Kill only fires once the tool is actually in the
+          Character
+      17. the attack loop calls scanNPCs(false), so a child add or a humanoid
+          death is picked up immediately instead of up to 2s later
 ]]
 
 if not game:IsLoaded() then
@@ -64,6 +77,13 @@ do
     getgenv()._autoVoteLoopRunning = false
     getgenv()._semiDown = false
     getgenv()._qDown = false
+
+    -- The previous execution may still own a __namecall hook. Restore it, or
+    -- every re-exec stacks another hook on top and the chain never unwinds.
+    local prevCleanup = getgenv()._cleanupMultiplier
+    if type(prevCleanup) == "function" then pcall(prevCleanup) end
+    getgenv()._cleanupMultiplier = nil
+    _G.multiplier = false
 end
 
 -- Load external libraries
@@ -237,6 +257,7 @@ for i = 1, 11 do if i ~= 8 then EXCLUDED["dead guy " .. i] = 1 end end
 -- Runtime state
 -- ============================================================================
 local cachedWeapon, lastScanTime, killauraActive = nil, 0, false
+local lastEquipAttempt = 0
 local killauraAttackThread, killauraScanThread
 local swingCounter, mercyBusy = 0, false
 local metatableModified, gameMetatable, originalNamecall, savedHook = false, nil, nil, nil
@@ -609,10 +630,14 @@ local function refreshWeapon()
     if cachedWeapon then return cachedWeapon end
 
     -- Backpack melee: equip it, then attack on a later tick. Firing from the
-    -- Backpack is silently rejected by the server.
+    -- Backpack is silently rejected by the server. Throttled so the attack loop
+    -- cannot spam EquipTool every frame while the swap is in flight.
     local bagged = findMeleeIn(LocalPlayer:FindFirstChild("Backpack"))
     if bagged then
-        equipTool(bagged)
+        if os.clock() - lastEquipAttempt >= 0.5 then
+            lastEquipAttempt = os.clock()
+            equipTool(bagged)
+        end
         return nil
     end
 
@@ -921,6 +946,9 @@ local function cleanupMultiplier()
     metatableModified = false
 end
 
+-- Published so a later execution can unwind this hook before installing its own.
+getgenv()._cleanupMultiplier = cleanupMultiplier
+
 local function setupMultiplier()
     cleanupMultiplier()
 
@@ -1049,7 +1077,9 @@ getgenv()._inputBeganConn = UserInputService.InputBegan:Connect(function(input, 
                     end
                     for _ = 1, CONFIG.tuning.mercySwings do
                         if not getgenv()._semiDown or not alive() then break end
-                        lib.fire(mercyTool, "VerifyHit", nil, hrp.Position)
+                        if inCharacter(mercyTool) then
+                            lib.fire(mercyTool, "VerifyHit", nil, hrp.Position)
+                        end
                         task.wait(CONFIG.tuning.mercyDelay)
                     end
                     mercyBusy = false
@@ -1182,42 +1212,48 @@ local function setToggleValue(element, value)
 end
 
 -- MAIN TAB
+-- Each enable gets a fresh run id. Loops exit on their own next tick; closing a
+-- thread parked inside task.wait leaves a queued resume behind ("cannot resume
+-- dead coroutine") and, worse, a fast off/on could leave two attack loops alive.
+local killauraRun = 0
+
 toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
-    setKillauraActive(v)
     config.killauraEnabled = v
+    killauraRun = killauraRun + 1
+    local myRun = killauraRun
+    setKillauraActive(v)
 
-    if v then
-        if killauraScanThread then pcall(coroutine.close, killauraScanThread) end
-        if killauraAttackThread then pcall(coroutine.close, killauraAttackThread) end
-
-        killauraScanThread = coroutine.create(function()
-            while killauraActive and alive() do
-                pcall(scanNPCs, true)
-                lastScanTime = os.clock()
-                task.wait(CONFIG.tuning.forcedRescanInterval)
-            end
-        end)
-        getgenv()._killauraScanThread = killauraScanThread
-        coroutine.resume(killauraScanThread)
-
-        killauraAttackThread = coroutine.create(function()
-            while killauraActive and alive() do
-                local fired = 0
-                pcall(function() fired = attackBatch(npcCache) or 0 end)
-                task.wait(calculateAttackInterval(fired))
-            end
-        end)
-        getgenv()._killauraAttackThread = killauraAttackThread
-        coroutine.resume(killauraAttackThread)
-    else
-        killauraActive = false
-        if killauraScanThread then pcall(coroutine.close, killauraScanThread); killauraScanThread = nil end
-        if killauraAttackThread then pcall(coroutine.close, killauraAttackThread); killauraAttackThread = nil end
-        getgenv()._killauraScanThread = nil
-        getgenv()._killauraAttackThread = nil
+    if not v then
         npcCache, lastScanTime, cachedWeapon = {}, 0, nil
         npcStale = true -- force a rescan so Bring NPCs does not return the emptied cache
+        return
     end
+
+    killauraScanThread = coroutine.create(function()
+        while alive() and killauraActive and myRun == killauraRun do
+            pcall(scanNPCs, true)
+            lastScanTime = os.clock()
+            task.wait(CONFIG.tuning.forcedRescanInterval)
+        end
+    end)
+    getgenv()._killauraScanThread = killauraScanThread
+    coroutine.resume(killauraScanThread)
+
+    killauraAttackThread = coroutine.create(function()
+        while alive() and killauraActive and myRun == killauraRun do
+            local fired = 0
+            pcall(function()
+                -- Cheap when nothing changed: returns the cache unless ChildAdded
+                -- or a Died listener marked it stale, so new spawns are picked up
+                -- without waiting up to 2s for the forced rescan.
+                scanNPCs(false)
+                fired = attackBatch(npcCache) or 0
+            end)
+            task.wait(calculateAttackInterval(fired))
+        end
+    end)
+    getgenv()._killauraAttackThread = killauraAttackThread
+    coroutine.resume(killauraAttackThread)
 end)
 
 toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v)
