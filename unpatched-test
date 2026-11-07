@@ -1,5 +1,5 @@
 --[[
-    Dummies vs Noobs Premium - v2.6 (bug-fixed)
+    Dummies vs Noobs Premium - v2.7 (bug-fixed)
     qcrylic
 
     Kept from v2.4: teardown, double-buffered NPC cache, shared lib, HUD settings,
@@ -42,6 +42,24 @@
           Character
       17. the attack loop calls scanNPCs(false), so a child add or a humanoid
           death is picked up immediately instead of up to 2s later
+
+    v2.7 (review pass):
+      18. attackBatch equips before the isHoldingTool() gate; with empty hands
+          the backpack auto-equip was unreachable, so killaura stayed dead after
+          every respawn
+      19. an APU without a Pilot child no longer throws inside scanNPCs and
+          aborts the entire NPC scan
+      20. restored config flags are reflected in the toggle defaults, and the
+          two Mercy modes are de-conflicted on load
+      21. Auto Vote waits voteCooldown (10s) between invokes instead of calling
+          the Vote remote about once a second for the whole session
+      22. landmine cleared notifications use the throttle helper
+      23. third-party libraries are downloaded through a guarded loader that
+          names the failing source instead of erroring on a nil chunk
+      24. HUD: text aligns per anchor, and a stale fade callback can no longer
+          hide a re-created background
+      25. mobile button no longer points at an empty asset id; Spawn Noob Units
+          labels itself client-side only; Infinite PDC/Ammo note added
 ]]
 
 if not game:IsLoaded() then
@@ -86,10 +104,28 @@ do
     _G.multiplier = false
 end
 
--- Load external libraries
-local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua"))()
-local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
-local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+-- Load external libraries. These are unpinned third-party URLs, so download,
+-- compile and first run are guarded: a bad response now names the source
+-- instead of dying with "attempt to call a nil value" before any UI exists.
+local function loadRemote(url, label)
+    local ok, body = pcall(function() return game:HttpGet(url) end)
+    if not ok or type(body) ~= "string" or #body < 64 then
+        error(string.format("[dvn] %s: download failed (%s)", label, tostring(body)), 0)
+    end
+    local chunk, err = loadstring(body, label)
+    if not chunk then
+        error(string.format("[dvn] %s: compile failed (%s)", label, tostring(err)), 0)
+    end
+    local ran, result = pcall(chunk)
+    if not ran then
+        error(string.format("[dvn] %s: runtime error (%s)", label, tostring(result)), 0)
+    end
+    return result
+end
+
+local Fluent = loadRemote("https://raw.githubusercontent.com/skeptica4/Fluentvv/refs/heads/main/fluent.lua", "Fluent")
+local SaveManager = loadRemote("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua", "SaveManager")
+local InterfaceManager = loadRemote("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua", "InterfaceManager")
 
 -- Services
 local PlayersService = game:GetService("Players")
@@ -154,7 +190,8 @@ if UserInputService.TouchEnabled then
         ImageLabel.BorderSizePixel = 0
         ImageLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
         ImageLabel.Size = UDim2.new(0, 45, 0, 45)
-        ImageLabel.Image = "rbxassetid://" -- placeholder: set a real asset id
+        ImageLabel.Image = "" -- text-only button until a real asset id exists
+        ImageLabel.BackgroundTransparency = 0.35
 
         TextButton.Parent = MainFrame
         TextButton.BackgroundColor3 = Color3.new(1, 1, 1)
@@ -195,8 +232,7 @@ local CONFIG = {
         mercySwings = 3,
         mercyDelay = 0.17,
         bolterDelay = 0.08,
-        voteDelay = 1,
-        idleVoteDelay = 10,
+        voteCooldown = 10,
         landmineDelay = 0.5,
         teleportDelay = 0.1,
         tankDistance = 13,
@@ -231,8 +267,10 @@ end
 local savedConfig = getgenv().config
 if type(savedConfig) ~= "table" then savedConfig = {} end
 
--- killauraEnabled deliberately not restored: the toggle is the source of truth,
--- otherwise a saved `true` shows "off" in the UI while the flag reads true.
+-- killauraEnabled is deliberately not restored from getgenv: the toggle is the
+-- source of truth, otherwise a saved `true` shows "off" while the flag reads
+-- true. SaveManager autoload is the one path that may still re-arm it, and that
+-- also moves the toggle itself.
 local config = {
     killauraEnabled = false,
     isTeleportEnabled = savedConfig.isTeleportEnabled == true,
@@ -256,7 +294,7 @@ for i = 1, 11 do if i ~= 8 then EXCLUDED["dead guy " .. i] = 1 end end
 -- ============================================================================
 -- Runtime state
 -- ============================================================================
-local cachedWeapon, lastScanTime, killauraActive = nil, 0, false
+local cachedWeapon, killauraActive = nil, false
 local lastEquipAttempt = 0
 local killauraAttackThread, killauraScanThread
 local swingCounter, mercyBusy = 0, false
@@ -444,7 +482,10 @@ local function scanNPCs(force)
                     cacheAddTarget(staging, model, getLiveHumanoid(model))
                 end
             elseif name == "APU" then
-                cacheAddTarget(staging, model, getLiveHumanoid(model:FindFirstChild("Pilot")) or getLiveHumanoid(model))
+                -- getLiveHumanoid(nil) throws, and that aborted the whole scan,
+                -- so an APU without a Pilot used to stop all targeting.
+                local pilot = model:FindFirstChild("Pilot")
+                cacheAddTarget(staging, model, (pilot and getLiveHumanoid(pilot)) or getLiveHumanoid(model))
             else
                 cacheAddTarget(staging, model, getLiveHumanoid(model))
             end
@@ -563,7 +604,7 @@ end
 -- Landmine destruction
 -- ============================================================================
 local function destroyLandmines()
-    if lib.destroyNamed("Landmine") then notify("System", "Landmines cleared", 4) end
+    if lib.destroyNamed("Landmine") then notifyThrottled("Landmines cleared", 10) end
 end
 
 -- ============================================================================
@@ -750,6 +791,11 @@ local function applyHUDPosition()
 
     hudContainer.AnchorPoint = Vector2.new(anchorX, anchorY)
     hudContainer.Position = UDim2.new(px, pxOff, py, pyOff)
+    if hudLabel then
+        -- Text runs away from the anchored edge instead of always to the right.
+        hudLabel.TextXAlignment = anchorX == 1 and Enum.TextXAlignment.Right
+            or Enum.TextXAlignment.Left
+    end
 end
 
 local function scheduleHUDHide(delay)
@@ -758,16 +804,20 @@ local function scheduleHUDHide(delay)
     if hudFadeTween then pcall(function() hudFadeTween:Cancel() end) end
     hudFadeTween = nil
 
+    -- Capture the instance: if initHUD runs while this is pending, the stale
+    -- callback must not hide the freshly created background.
+    local bg = hudBackground
     hudHideTask = task.delay(delay, function()
-        if not hudShown or not hudGui or not hudGui.Parent or not hudBackground then return end
-        local tween = TweenService:Create(hudBackground,
+        if not hudShown or bg ~= hudBackground or not hudGui or not hudGui.Parent then return end
+        local tween = TweenService:Create(bg,
             TweenInfo.new(config.hud.fadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
             { BackgroundTransparency = 1 })
         hudFadeTween = tween
         tween:Play()
         tween.Completed:Once(function()
+            if bg ~= hudBackground then return end
             hudShown = false
-            hudBackground.Visible = false
+            bg.Visible = false
             hudFadeTween = nil
         end)
     end)
@@ -877,9 +927,12 @@ local consecutiveFireFailures = 0
 local lastFailurePauseTime = 0
 
 local function attackBatch(targets)
-    if #targets == 0 or not isHoldingTool() then return 0 end
+    if #targets == 0 then return 0 end
+    -- Equip before checking the hand: with nothing held isHoldingTool() is
+    -- false, and returning here made refreshWeapon()'s backpack auto-equip
+    -- unreachable, so killaura stayed dead after every respawn.
     local weapon = refreshWeapon()
-    if not weapon then return 0 end
+    if not weapon or not isHoldingTool() then return 0 end
 
     local verifyHitRemote = weapon:FindFirstChild("VerifyHit")
     if not verifyHitRemote or not verifyHitRemote:IsA("RemoteEvent") or not verifyHitRemote.Parent then
@@ -1133,18 +1186,15 @@ getgenv()._autoVoteThread = task.spawn(function()
     getgenv()._autoVoteLoopRunning = true
     while alive() do
         if config.isAutoVoteEnabled then
-            local fired = false
-            for _ = 1, CONFIG.tuning.idleVoteDelay do
-                if not config.isAutoVoteEnabled or not alive() then break end
-                local vote = lib.remote({ "Remotes", "Waves", "Vote" })
-                if vote then
-                    pcall(function() vote:InvokeServer() end)
-                    fired = true
-                    break
-                end
+            local vote = lib.remote({ "Remotes", "Waves", "Vote" })
+            if vote then
+                -- The remote exists for the whole session, so the old retry loop
+                -- invoked it about once a second forever. Space out the calls.
+                pcall(function() vote:InvokeServer() end)
+                task.wait(CONFIG.tuning.voteCooldown)
+            else
                 task.wait(1)
             end
-            if fired then task.wait(CONFIG.tuning.voteDelay) end
         else
             task.wait(1)
         end
@@ -1199,8 +1249,10 @@ SaveManager:SetFolder("FluentScriptHub/specific-game")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
-local function toggle(tab, name, title, cb)
-    local element = tab:AddToggle(name, { Title = title, Default = false })
+-- `default` mirrors a flag restored from getgenv; without it a re-exec ran a
+-- feature while its switch still read off.
+local function toggle(tab, name, title, cb, default)
+    local element = tab:AddToggle(name, { Title = title, Default = default == true })
     element:OnChanged(cb)
     return element
 end
@@ -1224,7 +1276,7 @@ toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
     setKillauraActive(v)
 
     if not v then
-        npcCache, lastScanTime, cachedWeapon = {}, 0, nil
+        npcCache, cachedWeapon = {}, nil
         npcStale = true -- force a rescan so Bring NPCs does not return the emptied cache
         return
     end
@@ -1232,7 +1284,6 @@ toggle(Tabs.Main, "KillauraToggle", "Killaura", function(v)
     killauraScanThread = coroutine.create(function()
         while alive() and killauraActive and myRun == killauraRun do
             pcall(scanNPCs, true)
-            lastScanTime = os.clock()
             task.wait(CONFIG.tuning.forcedRescanInterval)
         end
     end)
@@ -1258,14 +1309,19 @@ end)
 
 toggle(Tabs.Main, "BringNPCsToggle", "Bring NPCs", function(v)
     config.isTeleportEnabled = v
-end)
+end, config.isTeleportEnabled)
 
 toggle(Tabs.Main, "AutoVoteToggle", "Auto Vote Waves", function(v)
     config.isAutoVoteEnabled = v
-end)
+end, config.isAutoVoteEnabled)
 
-local mercyToggle = Tabs.Combat:AddToggle("MercyKillToggle", { Title = "Mercy Kill", Default = false })
-local mouseMercyToggle = Tabs.Combat:AddToggle("MouseMercyKillToggle", { Title = "Mercy Kill (Mouse)", Default = false })
+-- Restore the Mercy modes, keeping them mutually exclusive on load the same
+-- way the OnChanged handlers do when the user flips a switch.
+local mercyTargeted = config.isMercyKillEnabled and not config.isMercyKillMouseEnabled
+local mercyMouse = config.isMercyKillMouseEnabled and not config.isMercyKillEnabled
+config.isMercyKillEnabled, config.isMercyKillMouseEnabled = mercyTargeted, mercyMouse
+local mercyToggle = Tabs.Combat:AddToggle("MercyKillToggle", { Title = "Mercy Kill", Default = mercyTargeted })
+local mouseMercyToggle = Tabs.Combat:AddToggle("MouseMercyKillToggle", { Title = "Mercy Kill (Mouse)", Default = mercyMouse })
 
 mercyToggle:OnChanged(function(v)
     config.isMercyKillEnabled = v
@@ -1293,11 +1349,16 @@ end)
 
 toggle(Tabs.Combat, "PDCChargesToggle", "Infinite PDC", function(v)
     config.isPDCChargesEnabled = v
-end)
+end, config.isPDCChargesEnabled)
 
 toggle(Tabs.Combat, "SuperWeaponsToggle", "Infinite Ammo", function(v)
     config.isSuperWeaponsEnabled = v
-end)
+end, config.isSuperWeaponsEnabled)
+
+Tabs.Combat:AddParagraph({
+    Title = "Note",
+    Content = "Infinite PDC / Infinite Ammo only set client-side attributes. The server never receives them, so they may have no effect.",
+})
 
 Tabs.Combat:AddParagraph({
     Title = "Shortcuts",
@@ -1318,7 +1379,7 @@ Tabs.Targeting:AddButton({
 
 Tabs.Targeting:AddButton({
     Title = "Spawn Noob Units",
-    Description = "Spawns all standard noob units to workspace",
+    Description = "Spawns noob units in workspace (client-side preview only)",
     Callback = function()
         local ex = {
             Dreadnought=1, ["Achilles(ht)"]=1, Sparchilles=1, APU=1, APU_Operator=1, Hermes=1,
@@ -1336,17 +1397,17 @@ Tabs.Targeting:AddButton({
             end
             npcStale = true
         end)
-        notify("Spawn Noob Units", "Spawned " .. count .. " unit" .. (count == 1 and "" or "s"), 4)
+        notify("Spawn Noob Units", "Spawned " .. count .. " unit" .. (count == 1 and "" or "s") .. " (client-side)", 4)
     end,
 })
 
 toggle(Tabs.Utility, "LandmineToggle", "Destroy Landmines", function(v)
     config.shouldDestroyLandmines = v
-end)
+end, config.shouldDestroyLandmines)
 
 toggle(Tabs.Utility, "BolterCoinToggle", "Bolter Coin Hit (Hold Q)", function(v)
     config.isBolterCoinHitEnabled = v
-end)
+end, config.isBolterCoinHitEnabled)
 
 Tabs.Utility:AddSection("Teleportation")
 
@@ -1466,6 +1527,6 @@ Tabs.Settings:AddParagraph({
     Content = "Press [Left Control] to minimize the UI  |  Hold [;] for Mercy Kill  |  Hold [Q] for Bolter Coin Hit",
 })
 
-notify("Fluent", "Script loaded! (v2.5)", 8)
+notify("Fluent", "Script loaded! (v2.7)", 8)
 Window:SelectTab(1)
 SaveManager:LoadAutoloadConfig()
